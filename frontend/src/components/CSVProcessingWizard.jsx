@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import axios from 'axios';
+import { useNavigate } from 'react-router-dom';
 import { UploadCloud, AlertCircle, CheckCircle2, AlertTriangle, FileUp, Save } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -21,6 +22,7 @@ const getCurrencySymbol = (code) => {
 };
 
 const CSVProcessingWizard = () => {
+  const navigate = useNavigate();
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [processedRows, setProcessedRows] = useState([]);
@@ -224,7 +226,7 @@ const CSVProcessingWizard = () => {
       setProcessedRows([]);
       setFile(null);
       if (res.data.groupId) {
-          window.location.href = `/group/${res.data.groupId}?tab=audit`;
+          navigate(`/group/${res.data.groupId}?tab=audit`);
       }
     } catch (err) {
       console.error(err);
