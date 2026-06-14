@@ -16,16 +16,22 @@ const ExpenseSplit = sequelize.define('ExpenseSplit', {
     allowNull: false,
   },
   calculated_share_amount: {
-    type: DataTypes.NUMERIC(12, 4),
+    type: DataTypes.DECIMAL(12, 4),
     allowNull: false,
   },
   raw_split_value: {
-    type: DataTypes.NUMERIC(12, 4),
+    type: DataTypes.DECIMAL(12, 4),
     allowNull: true,
   },
 }, {
   tableName: 'expense_splits',
   timestamps: false,
+  indexes: [
+    {
+      name: 'idx_splits_expense_user',
+      fields: ['expense_id', 'user_id']
+    }
+  ]
 });
 
 module.exports = ExpenseSplit;

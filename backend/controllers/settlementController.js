@@ -1,5 +1,6 @@
 const { User, Expense, ExpenseSplit } = require('../models');
 const Big = require('big.js');
+Big.RM = 2; // Banker's Rounding (Half-Even)
 
 exports.calculateSettlements = async (req, res) => {
     try {
@@ -81,7 +82,7 @@ exports.calculateSettlements = async (req, res) => {
             settlements.push({
                 from: debtor.userId,
                 to: creditor.userId,
-                amount: minAmount.round(2, Big.roundHalfUp).toNumber()
+                amount: minAmount.round(4).toNumber()
             });
 
             debtor.amount = debtor.amount.minus(minAmount);
@@ -139,11 +140,11 @@ exports.getAuditTrail = async (req, res) => {
             });
 
             // Calculate if there's any unallocated debt for this expense that falls back to the payer
-            let totalSplit = 0;
-            e.ExpenseSplits.forEach(s => totalSplit += Number(s.calculated_share_amount));
-            const unallocated = Number(e.amount) - totalSplit;
+            let totalSplit = Big(0);
+            e.ExpenseSplits.forEach(s => totalSplit = totalSplit.plus(s.calculated_share_amount));
+            const unallocated = Big(e.amount).minus(totalSplit);
 
-            if (Math.abs(unallocated) > 0.001) {
+            if (unallocated.abs().gt(0.0001)) {
                 auditTrail.push({
                     date: e.date,
                     description: `${e.description} (Unallocated Error/Rounding)`,
@@ -151,8 +152,8 @@ exports.getAuditTrail = async (req, res) => {
                     original_amount: e.amount,
                     currency: e.currency,
                     exchange_rate: e.exchange_rate_to_base,
-                    split_share: unallocated,
-                    impact: -unallocated
+                    split_share: unallocated.toNumber(),
+                    impact: unallocated.times(-1).toNumber()
                 });
             }
         });

@@ -1,6 +1,7 @@
 const csv = require('fast-csv');
 const { Readable } = require('stream');
 const Big = require('big.js');
+Big.RM = 2; // Banker's Rounding (Half-Even)
 const { parse, isValid, parseISO } = require('date-fns');
 const { sequelize, Expense, ExpenseSplit, User, GroupMember } = require('../models');
 
@@ -265,14 +266,14 @@ exports.processCSV = async (req, res) => {
             }
             let currentSplits = {};
             if (parsedRow.split_type === 'equal') {
-                involved.forEach(m => currentSplits[m] = 100 / involved.length);
+                involved.forEach(m => currentSplits[m] = Big(100).div(involved.length).toNumber());
             } else if (parsedRow.split_type === 'percentage') {
                 currentSplits = { ...parsedRow.parsed_split_details };
             }
 
             let originalSplitRecord = { ...currentSplits };
             for(let k in originalSplitRecord) {
-                originalSplitRecord[k] = parseFloat(originalSplitRecord[k].toFixed(2));
+                originalSplitRecord[k] = Big(originalSplitRecord[k]).round(2).toNumber();
             }
             
             let correctionNeeded = false;
@@ -303,11 +304,11 @@ exports.processCSV = async (req, res) => {
                     }
                     
                     if (activeDays >= 0) {
-                        let maxRatio = activeDays / daysInMonth;
-                        let oldShare = currentSplits[member];
-                        let allowedShare = oldShare * maxRatio;
+                        let maxRatio = Big(activeDays).div(daysInMonth);
+                        let oldShare = Big(currentSplits[member]);
+                        let allowedShare = oldShare.times(maxRatio).toNumber();
                         
-                        if (oldShare > allowedShare) {
+                        if (oldShare.gt(allowedShare)) {
                              correctionNeeded = true;
                              currentSplits[member] = allowedShare;
                              
@@ -336,9 +337,9 @@ exports.processCSV = async (req, res) => {
             });
             
             if (correctionNeeded) {
-                 let total = Object.values(currentSplits).reduce((a,b) => a + b, 0);
-                 if (total >= 0 && total < 100) {
-                      let diff = 100 - total;
+                 let total = Object.values(currentSplits).reduce((a,b) => Big(a).plus(b).toNumber(), 0);
+                 if (Big(total).gte(0) && Big(total).lt(100)) {
+                      let diff = Big(100).minus(total).toNumber();
                       let activeCount = 0;
                       
                       originalInvolved.forEach(m => {
@@ -361,12 +362,20 @@ exports.processCSV = async (req, res) => {
                                   if (d.left_at && expDate > new Date(d.left_at) && (expDate.getMonth() !== new Date(d.left_at).getMonth() || expDate.getFullYear() !== new Date(d.left_at).getFullYear())) isActive = false;
                                   if (d.joined_at && expDate < new Date(d.joined_at) && (expDate.getMonth() !== new Date(d.joined_at).getMonth() || expDate.getFullYear() !== new Date(d.joined_at).getFullYear())) isActive = false;
                               }
-                              if (isActive) currentSplits[m] += (diff / activeCount);
+                              if (isActive) currentSplits[m] = Big(currentSplits[m]).plus(Big(diff).div(activeCount)).toNumber();
                           });
                       }
                       
-                      for(let k in currentSplits) {
-                          currentSplits[k] = parseFloat(currentSplits[k].toFixed(2));
+                      let finalTotal = Big(0);
+                      let keys = Object.keys(currentSplits);
+                      for(let i=0; i<keys.length; i++) {
+                          let k = keys[i];
+                          if (i === keys.length - 1) {
+                               currentSplits[k] = Big(100).minus(finalTotal).round(2).toNumber();
+                          } else {
+                               currentSplits[k] = Big(currentSplits[k]).round(2).toNumber();
+                               finalTotal = finalTotal.plus(currentSplits[k]);
+                          }
                       }
                       
                       anomaly = {
@@ -499,20 +508,31 @@ exports.commitData = async (req, res) => {
             }
             if (validSplitMembers.length === 0) validSplitMembers = [payerName]; // fallback to payer
             
-            let splitValue = d.base_amount / validSplitMembers.length;
+            let baseAmountBig = Big(d.base_amount);
+            let totalAllocated = Big(0);
 
-            for (let member of validSplitMembers) {
+            for (let i = 0; i < validSplitMembers.length; i++) {
+                let member = validSplitMembers[i];
                 const mId = userMap[member] || adminId;
-                let actualShare = splitValue;
-                if(d.parsed_split_details && d.split_type === 'percentage') {
-                     // Note: percentage might not add up to 100 if someone was excluded, but for this demo we'll assume percentages imply manual override or we just apply the percentage.
-                     actualShare = Big(d.base_amount).times(d.parsed_split_details[member] || 0).div(100).toNumber();
+                let actualShareBig;
+                
+                if (d.parsed_split_details && d.split_type === 'percentage') {
+                     actualShareBig = baseAmountBig.times(d.parsed_split_details[member] || 0).div(100).round(4);
+                } else {
+                     actualShareBig = baseAmountBig.div(validSplitMembers.length).round(4);
                 }
+
+                // Zero-Sum logic: distribute sub-cent rounding fractions to the last member
+                if (i === validSplitMembers.length - 1) {
+                     actualShareBig = baseAmountBig.minus(totalAllocated).round(4);
+                }
+                
+                totalAllocated = totalAllocated.plus(actualShareBig);
 
                 await ExpenseSplit.create({
                     expense_id: exp.id,
                     user_id: mId,
-                    calculated_share_amount: actualShare,
+                    calculated_share_amount: actualShareBig.toNumber(),
                     raw_split_value: null
                 }, { transaction: t });
             }

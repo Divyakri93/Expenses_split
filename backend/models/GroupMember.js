@@ -31,6 +31,12 @@ const GroupMember = sequelize.define('GroupMember', {
 }, {
   tableName: 'group_members',
   timestamps: false,
+  indexes: [
+    {
+      name: 'idx_group_members_timeline',
+      fields: ['group_id', 'user_id', 'joined_at', 'left_at']
+    }
+  ]
 });
 
 module.exports = GroupMember;

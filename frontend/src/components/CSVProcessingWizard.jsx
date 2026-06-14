@@ -436,8 +436,8 @@ const CSVProcessingWizard = () => {
                 )}
 
                 {activeRow.warnings.length > 0 && (
-                  <div className="mb-6 bg-amber-500/10 border border-amber-500/30 rounded-lg p-4 shadow-[0_0_15px_rgba(251,191,36,0.1)]">
-                    <h3 className="text-sm font-semibold text-amber-400 flex items-center mb-2"><AlertTriangle className="h-4 w-4 mr-2"/> Warnings</h3>
+                  <div className="mb-6 bg-amber-500/10 border border-amber-500/30 rounded-lg p-4 shadow-[0_0_15px_rgba(251,191,36,0.3)]">
+                    <h3 className="text-sm font-semibold text-amber-400 flex items-center mb-2"><AlertTriangle className="h-4 w-4 mr-2"/> Arbitrage Protection Triggered</h3>
                     <ul className="list-disc pl-5 text-sm text-amber-300">
                       {activeRow.warnings.map((warn, i) => <li key={i}>{warn}</li>)}
                     </ul>
@@ -451,17 +451,15 @@ const CSVProcessingWizard = () => {
                         activeRow.data.anomaly.type === 'MID_MONTH_JOINER' ? "bg-amber-500/10 border-amber-500/30 shadow-[0_0_15px_rgba(245,158,11,0.1)]" :
                         "bg-purple-500/10 border-purple-500/30 shadow-[0_0_15px_rgba(168,85,247,0.1)]"
                    )}>
-                     <h3 className={clsx("text-sm font-semibold flex items-center mb-2", 
+                     <h3 className={clsx("text-sm font-semibold flex items-center mb-2 drop-shadow-md", 
                         activeRow.data.anomaly.type === 'CONFLICTING_SPLIT' ? "text-indigo-400" : 
                         activeRow.data.anomaly.type === 'POST_EXIT_MEMBER_BILLED' ? "text-rose-400" :
                         activeRow.data.anomaly.type === 'MID_MONTH_JOINER' ? "text-amber-400" :
                         "text-purple-400"
                      )}>
                         <AlertCircle className="h-4 w-4 mr-2"/> 
-                        {activeRow.data.anomaly.type === 'CONFLICTING_SPLIT' ? "Conflicting Split Definitions" : 
-                         activeRow.data.anomaly.type === 'POST_EXIT_MEMBER_BILLED' ? "Critical Anomaly: Post-Exit Member Billed" :
-                         activeRow.data.anomaly.type === 'MID_MONTH_JOINER' ? "Universal Temporal Log: Mid-Month Joiner Adjustment" :
-                         "Pro-Rata Temporal Split Validation"}
+                        {activeRow.data.anomaly.type === 'CONFLICTING_SPLIT' ? "Conflicting Split Definitions Blocked" : 
+                         "Temporal Frontier Violation Intercepted"}
                      </h3>
                      <p className={clsx("text-sm mb-4 font-medium whitespace-pre-wrap", 
                         activeRow.data.anomaly.type === 'CONFLICTING_SPLIT' ? "text-indigo-300" : 

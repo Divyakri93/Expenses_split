@@ -20,7 +20,7 @@ const Expense = sequelize.define('Expense', {
     allowNull: false,
   },
   amount: {
-    type: DataTypes.NUMERIC(12, 4),
+    type: DataTypes.DECIMAL(12, 4),
     allowNull: false,
   },
   currency: {
@@ -28,7 +28,7 @@ const Expense = sequelize.define('Expense', {
     allowNull: false,
   },
   exchange_rate_to_base: {
-    type: DataTypes.NUMERIC(12, 6),
+    type: DataTypes.DECIMAL(12, 6),
     allowNull: false,
     defaultValue: 1.0,
   },
@@ -57,6 +57,12 @@ const Expense = sequelize.define('Expense', {
   timestamps: true,
   createdAt: 'created_at',
   updatedAt: false,
+  indexes: [
+    {
+      name: 'idx_expenses_group_date',
+      fields: ['group_id', 'date']
+    }
+  ]
 });
 
 module.exports = Expense;
