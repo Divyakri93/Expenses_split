@@ -4,12 +4,18 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Wallet } from 'lucide-react';
 
 const Signup = () => {
-  const { signup } = useContext(AuthContext);
+  const { signup, user } = useContext(AuthContext);
   const navigate = useNavigate();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (user) {
+      navigate('/');
+    }
+  }, [user, navigate]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -17,7 +23,7 @@ const Signup = () => {
       await signup(name, email, password);
       navigate('/');
     } catch (err) {
-      setError(err.response?.data?.error || 'Signup failed');
+      setError(err.response?.data?.error || err.message || 'Signup failed');
     }
   };
 

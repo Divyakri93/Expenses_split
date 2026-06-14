@@ -27,6 +27,7 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     const res = await axios.post('/api/auth/login', { email, password });
+    if (!res.data || !res.data.token) throw new Error("API configuration error. VITE_API_URL is likely missing in the build.");
     localStorage.setItem('token', res.data.token);
     axios.defaults.headers.common['Authorization'] = `Bearer ${res.data.token}`;
     setUser(res.data.user);
@@ -34,6 +35,7 @@ export const AuthProvider = ({ children }) => {
 
   const signup = async (name, email, password) => {
     const res = await axios.post('/api/auth/signup', { name, email, password });
+    if (!res.data || !res.data.token) throw new Error("API configuration error. VITE_API_URL is likely missing in the build.");
     localStorage.setItem('token', res.data.token);
     axios.defaults.headers.common['Authorization'] = `Bearer ${res.data.token}`;
     setUser(res.data.user);
