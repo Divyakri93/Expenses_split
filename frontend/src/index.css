@@ -6,6 +6,12 @@
   body {
     @apply bg-slate-950 text-slate-100 font-sans antialiased;
   }
+  input, select, textarea {
+    @apply text-slate-900;
+  }
+  input::placeholder, textarea::placeholder {
+    @apply text-slate-400;
+  }
 }
 
 @layer utilities {
