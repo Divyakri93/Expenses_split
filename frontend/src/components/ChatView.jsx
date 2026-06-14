@@ -29,7 +29,9 @@ const ChatView = ({ groupId }) => {
         fetchHistory();
 
         // Connect Socket
-        const newSocket = io('');
+        let socketUrl = import.meta.env.VITE_API_URL || '';
+        if (socketUrl.endsWith('/')) socketUrl = socketUrl.slice(0, -1);
+        const newSocket = io(socketUrl);
 
         newSocket.on('connect', () => {
             newSocket.emit('join_group', groupId);
