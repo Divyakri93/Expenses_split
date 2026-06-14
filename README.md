@@ -1,15 +1,23 @@
-# FairShare SaaS: Shared Expense Ledger
+# FairShare: Intelligent Shared Expense Ledger
 
-An ultra-modern, Glassmorphic PERN stack application designed to ingest dirty CSV files, intercept 12 specific mathematical/structural anomalies, and interactively guide the user through pro-rata sanitizations before committing to PostgreSQL.
+An ultra-modern, Glassmorphic PERN stack application explicitly built to ingest dirty CSV ledgers, intercept structural anomalies, and mathematically resolve complex temporal boundaries (e.g., members moving in/out mid-month). 
 
-## Core Stack
-- **Database:** PostgreSQL
+This application was engineered to fulfill the exact constraints of the 4-person flat (Aisha, Rohan, Priya, Meera) plus Dev and Sam. 
+
+## 🎯 Fulfilling the Flatmates' Core Requests
+1. **Aisha ("One number per person"):** Handled via the **Settlement Matrix**, which automatically reduces all complex group debts into direct, optimized P2P payments (Who pays whom, how much, done).
+2. **Rohan ("No magic numbers"):** Handled via the **Audit Trail Ledger View**, providing a complete double-entry breakdown of every single transaction and its net impact on his balance.
+3. **Priya ("Dollar is not a rupee"):** Handled via the **Multi-Currency Engine**, which intercepts foreign currencies (e.g., `USD`) and applies a rigorous exchange rate to `INR` base amounts.
+4. **Sam ("Moved in mid-April"):** Handled via the **Temporal Boundary Interceptor**, which dynamically intercepts `MID_MONTH_JOINER` anomalies and calculates exact active days (e.g., 23/30 days) to propose an accurate fractional pro-rata split.
+5. **Meera ("Approve anything deleted/changed"):** Handled via the **Interactive Glassmorphic Validation Stream**. The system *never* silently drops or guesses data. Every single anomaly is paused, highlighted, and requires explicit user approval or manual override.
+
+## ⚙️ Core Stack & AI Usage
+- **Database:** PostgreSQL (Relational DB for absolute ledger integrity)
 - **Backend:** Node.js, Express, Sequelize, fast-csv
 - **Frontend:** React, Vite, Tailwind CSS, Lucide React
+- **AI Collaborator:** Google DeepMind Advanced Agentic Coding System. *(See `AI_USAGE.md` for a complete breakdown of prompt engineering, architectural collaboration, and diagnostic flaw patching).*
 
-## Deployment Instructions
-
-Follow these exact steps to run the application locally.
+## 🚀 Deployment & Setup Instructions
 
 ### 1. Database Setup
 Ensure PostgreSQL is installed and running on your local machine.
@@ -21,7 +29,6 @@ CREATE DATABASE expenses_db;
 
 ### 2. Backend Installation
 Open a terminal and navigate to the `backend` directory.
-
 ```bash
 cd backend
 npm install
@@ -35,114 +42,26 @@ DATABASE_URL=postgres://postgres:yourpassword@localhost:5432/expenses_db
 JWT_SECRET=your_super_secret_jwt_key
 ```
 
-### 4. Database Migrations
-The backend uses Sequelize to auto-sync the ER schema on startup. Simply start the server to run the migrations.
-
+### 4. Database Migrations & Startup
+The backend uses Sequelize to auto-sync the ER schema. 
 ```bash
-# Start the backend server (runs on port 5000)
+# Start the backend server
 node server.js
 ```
 
 ### 5. Frontend Installation & Startup
 Open a completely separate terminal window and navigate to the `frontend` directory.
-
 ```bash
 cd frontend
 npm install
-
-# Start the Vite React development server (runs on port 5173)
+# Start the Vite React development server
 npm run dev
 ```
 
-### 6. Usage
+### 6. Usage & Testing the CSV Importer
 Navigate to `http://localhost:5173` in your browser.
-1. Sign up for a new account.
-2. Create a Group and add members.
-3. Click **Import CSV** to access the `CSVProcessingWizard`.
-4. Upload `expenses_export.csv` to trigger the 12-Anomaly detection engine.
-5. Resolve the UI alerts, view the ledger summary, and commit the clean data to PostgreSQL.
-
-# Project Scope & Anomaly Detection Matrix
-
-This document outlines the scope of the CSV Ingestion & Sanitization Pipeline, the 12 specific anomalies targeted by the engine, their programmatic fallbacks, and the Entity-Relationship (ER) Schema for the PostgreSQL database.
-
-## 1. The 12-Anomaly Detector Engine Matrix
-
-The `csvSanitizer.js` engine intercepts the following structural and logical violations in the unverified CSV before database commit:
-
-| ID | Anomaly Name | Detection Algorithm Logic | Default Fallback / Programmatic Choice |
-|---|---|---|---|
-| 1 | Payer Omission Check | `!row.paid_by` | Flags as `Error`. Demands interactive user input via text field. |
-| 2 | Comma Inconsistencies | `amount.includes(',')` | Auto-sanitization. Strips commas before `parseFloat` (e.g. '1,200' -> 1200). |
-| 3 | Floating-Point Truncation | `amount !== parseFloat(amount).toFixed(2)` | Rounds to 2 decimals using `big.js` to ensure absolute ledger precision. |
-| 4 | Name Format Discrepancies | Fuzzy Levenshtein distance on active members. | Suggests the closest matching active member name if `distance <= 2`. |
-| 5 | Duplicate Entry | Matches exact `description` & `date` with `Levenshtein < 5` on other rows. | Flags as `Warning`. User must manually Accept or Reject the record. |
-| 6 | Non-Standard Dates | Uses `date-fns` `parseISO` or regex matches. | Re-formats to standard ISO `YYYY-MM-DD` or throws `Error` if unparseable. |
-| 7 | Settlement Rerouting | Regex match on "paid X back" or "settled". | Flags as `Warning` recommending exclusion, as debts are handled via the Settlement Engine, not expense pools. |
-| 8 | Percentage Overflow | Summing custom percentage allocations `!== 100`. | Auto-normalizes the array proportionally to sum exactly to 100%. |
-| 9 | Multi-Currency Omission | Missing `currency` column. | Assumes base group currency (`INR`). |
-| 10 | Foreign Currency Adds | `amount` specified in foreign symbols ($/€). | Converts to `INR` via static exchange rate mapping before ledger entry. |
-| 11 | Negative Inversion | `amount < 0` | Converts to positive value and flags as a Credit/Refund structure. |
-| 12 | Temporal Boundary Violation | Expense `date` falls outside the user's `joined_at` -> `left_at` window. | Flags `Anomaly`. Suggests a Pro-Rata adjusted split dynamically excluding the inactive member. |
-
-## 2. PostgreSQL Entity-Relationship (ER) Schema
-
-The underlying PERN stack strictly enforces data integrity through the following Relational Schema mapping:
-
-```mermaid
-erDiagram
-    USERS ||--o{ GROUP_MEMBERS : "joins"
-    USERS ||--o{ EXPENSES : "pays"
-    USERS ||--o{ EXPENSE_SPLITS : "owes"
-    GROUPS ||--o{ GROUP_MEMBERS : "contains"
-    GROUPS ||--o{ EXPENSES : "records"
-    EXPENSES ||--o{ EXPENSE_SPLITS : "divided into"
-
-    USERS {
-        uuid id PK
-        string username
-        string email UK
-        string password_hash
-    }
-    
-    GROUPS {
-        uuid id PK
-        string name
-        string description
-        string currency
-        timestamp created_at
-    }
-
-    GROUP_MEMBERS {
-        uuid group_id PK, FK
-        uuid user_id PK, FK
-        date joined_at
-        date left_at
-        string status
-    }
-
-    EXPENSES {
-        uuid id PK
-        uuid group_id FK
-        uuid paid_by_user_id FK
-        decimal amount
-        string description
-        date expense_date
-        string split_type
-    }
-
-    EXPENSE_SPLITS {
-        uuid expense_id PK, FK
-        uuid user_id PK, FK
-        decimal amount_owed
-        decimal percentage_share
-    }
-```
-
-### Database Indexes
-
-1. **`users_email_idx`**: Unique B-Tree index on `Users.email` for fast O(1) auth lookups.
-2. **`expenses_group_id_idx`**: B-Tree index on `Expenses.group_id` for fast ledger aggregation queries.
-3. **`expense_splits_user_id_idx`**: B-Tree index on `Expense_Splits.user_id` to quickly compute individual user debt balances across all groups.
-4. **`group_members_temporal_idx`**: Composite index on `(group_id, joined_at, left_at)` to rapidly calculate temporal boundary violations.
-
+1. Sign up / Login.
+2. Create a Group and add the flatmates.
+3. Click **CSV Import Wizard**.
+4. Upload `expenses_export.csv` to trigger the Anomaly Detection engine.
+5. Interactively resolve the anomalies, view the **CSV Changes Log** tab for the audit trail, and commit the clean data to PostgreSQL.

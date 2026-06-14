@@ -1,48 +1,63 @@
-# Engineering Decisions Journal
+# DECISIONS.md: Engineering & Product Decision Log
 
-This document serves as an analytical ledger for the core architectural crossroads encountered during the development of the FairShare SaaS application and the CSV Sanitization pipeline.
+This document serves as an analytical ledger detailing the core architectural crossroads encountered while building the FairShare platform, highlighting how imperfect data was handled deliberately rather than silently.
 
-## 1. Database Architecture: Relational PostgreSQL vs. NoSQL MongoDB
+---
 
-**Alternative Considered:** NoSQL (MongoDB)
-- *Pros:* Flexible schema allows storing dynamic CSV rows (even malformed ones) directly without rigid constraints. Nested documents would make it easy to store an expense and its dynamic splits in a single JSON object.
-- *Cons:* No innate ACID compliance across multi-document transactions. High risk of floating-point math divergence without strict decimal constraints.
+## 1. Anomaly Resolution: Auto-Drop vs. Interactive Interception
+**Core Challenge:** Meera requested: *"Clean up the duplicates — but I want to approve anything the app deletes or changes."*
 
-**Decision Chosen:** Relational PostgreSQL
-- *Technical Justification:* A financial ledger requires absolute mathematical integrity. PostgreSQL's `DECIMAL` types ensure floating-point precision is maintained (avoiding JavaScript's `0.1 + 0.2 = 0.30000000000000004` bug). Furthermore, the structural rigidity of Relational ER schemas (Expenses -> Splits) guarantees that orphaned debts cannot exist.
+**Options Considered:**
+1. *Auto-Drop/Silent Exclusions:* The system silently scrubs duplicates, fixes math, and imports the rest. (Frictionless but violates Meera's request and creates un-auditable ledger drift).
+2. *Interactive Interception:* The system pauses the import, visually surfaces the anomalies, proposes a "Smart Fix", but blocks execution until the user explicitly clicks "Accept".
 
-## 2. Ingestion Strategy: DB Staging Tables vs. In-Memory State
+**Decision Chosen:** Interactive Interception (Glassmorphic Validation Stream)
+**Why:** A crashed import and a silent guess are both failing conditions for a financial app. By shifting the liability of data mutation to the user through the UI, we respect Meera's rule of explicit consent while preventing silent financial discrepancies.
 
-**Alternative Considered:** Temporary Staging Tables (`staging_expenses`)
-- *Pros:* Extremely robust. Handles massive CSVs (100MB+) that would otherwise blow up Node.js V8 memory heaps.
-- *Cons:* High architectural overhead. Requires cron jobs or lifecycle hooks to sweep and clean up abandoned staging rows if users upload a file but close the tab before committing.
+---
 
-**Decision Chosen:** In-Memory State Pipeline (`fast-csv` -> React `useState`)
-- *Technical Justification:* Evaluated the constraint of typical user uploads (usually under 5,000 rows for personal group trips). Streaming the CSV through `importController.js` and holding the transformed JSON directly in the React frontend memory provides a much snappier, zero-latency user experience. The database is only touched once the entire payload is 100% structurally sound.
+## 2. Resolving Advanced Temporal Anomalies (Sam & Meera)
+**Core Challenge:** Sam asked: *"I moved in mid-April. Why would March electricity affect my balance?"* Meera moved out on March 31st but was billed for April rent. 
 
-## 3. Anomaly Resolution: Auto-Drop vs. Interactive Interception
-
-**Alternative Considered:** Auto-Drop (Silent Exclusion)
-- *Pros:* Frictionless user experience. The system simply drops bad rows and imports the good ones instantly.
-- *Cons:* Destructive data loss. Financial platforms cannot "silently" drop user ledger entries, as this leads to unresolvable balance disputes between group members.
-
-**Decision Chosen:** Interactive Interception (The Glassmorphic Validation Stream)
-- *Technical Justification:* Trust is the most critical metric for a financial application. By sequentially presenting all 12 anomalies to the user (highlighting them in Amber/Purple UI states), the system shifts the liability of data mutation to the user. The backend engine provides "Smart Suggested Fixes" (such as dynamic Pro-Rata Math), but enforces explicit user consent (clicking "Accept") before proceeding.
-
-## 4. Resolving Advanced Temporal Anomalies (Mid-Month Joiners & Post-Exit Billing)
-
-**Alternative Considered:** Hard Rejection / Blocked Imports
-- *Pros:* Strict enforcement of rules guarantees the ledger only contains 100% valid rows without needing complex extrapolation algorithms.
-- *Cons:* Terrible user experience. If a user pastes 200 rows of an apartment ledger, blocking the import because one member moved out 2 days early forces the user to manually recalculate fractional math outside the app.
+**Options Considered:**
+1. *Hard Rejection:* Block the CSV import entirely, forcing the user to manually exit the app and recalculate the split math in Excel before trying again. (Terrible UX).
+2. *Dynamic Pro-Rata Mathematical Interception:* Auto-calculate exact active days and propose a mathematically fair fractional split.
 
 **Decision Chosen:** Dynamic Pro-Rata Mathematical Interception
-- *Technical Justification:* To maximize convenience without sacrificing accuracy, the backend engine calculates the exact intersection of a member's active temporal window (`joined_at` -> `left_at`) and the expense date. If a member (like Sam) joins mid-month, the engine derives their fractional footprint (e.g., 23/30 days) and instantly proposes a hyper-accurate percentage split to the user. If a member (like Meera) is billed after leaving, it auto-assigns them 0 days and re-distributes their burden proportionally.
+**Why:** To maximize convenience without sacrificing accuracy. For Sam, the engine calculates his exact footprint (`30 days - 7 inactive = 23 active days`) and instantly proposes a hyper-accurate percentage split to save him from paying for the full month. For Meera, it assigns her `0 active days` in April and redistributes her equal share to the remaining active members.
+
+---
+
+## 3. Database Architecture: Relational PostgreSQL vs. NoSQL
+**Core Challenge:** Rohan requested: *"No magic numbers. If the app says I owe ₹2,300, I want to see exactly which expenses make that up."*
+
+**Options Considered:**
+1. *NoSQL (MongoDB):* Flexible schema allows storing dynamic CSV rows easily in nested JSON arrays.
+2. *Relational Database (PostgreSQL):* Strict ER tables requiring Foreign Keys linking `Expenses` to `Expense_Splits`.
+
+**Decision Chosen:** Relational PostgreSQL (as strictly enforced by the Assignment constraints)
+**Why:** Financial ledgers require absolute mathematical integrity. PostgreSQL's rigid Relational ER schema guarantees that orphaned debts cannot exist. It also perfectly powers Rohan's **Audit Trail**, allowing us to run a clean `JOIN` across `Users`, `Expenses`, and `Splits` to produce a completely transparent double-entry ledger.
+
+---
+
+## 4. Ingestion Strategy: DB Staging Tables vs. In-Memory State
+**Core Challenge:** How to temporarily store the dirty CSV data while the user decides how to fix the anomalies.
+
+**Options Considered:**
+1. *Temporary Staging Tables:* Dump raw CSV rows into an SQL `staging_expenses` table.
+2. *In-Memory State Pipeline:* Stream the CSV through `fast-csv` and hold the JSON objects directly in React's frontend memory state.
+
+**Decision Chosen:** In-Memory State Pipeline
+**Why:** High architectural overhead. Staging tables require cron jobs to sweep abandoned rows if users close the browser tab mid-import. Holding it in React state provides a zero-latency UX, ensuring the database is only touched once the entire payload is 100% structurally sound and user-approved.
+
+---
 
 ## 5. Audit Log Persistence for CSV Corrections
+**Core Challenge:** How to permanently store the "Smart Fixes" applied to the CSV so they can be audited later.
 
-**Alternative Considered:** Isolated `import_logs` Database Table
-- *Pros:* Highly normalized and clean structure for storing the exact keystrokes and structural adjustments made during the CSV Wizard.
-- *Cons:* Adds unnecessary join overhead when fetching expenses, and creates an isolated table that will bloat exponentially over time.
+**Options Considered:**
+1. *Isolated `import_logs` Database Table:* A complex secondary table to track exactly what percentage was changed.
+2. *Serializing Logs into the Expense `notes` Column:* Appending a structured string tag.
 
 **Decision Chosen:** Serializing Logs into the Expense `notes` Column
-- *Technical Justification:* Extremely lightweight and contextual. Since changes are directly relevant to the specific expense row, appending a structured `[System Corrections]` payload into the existing `notes` column natively binds the historical audit trail directly to the ledger entry. This enables the frontend to effortlessly render the new "CSV Changes Log" tab without requiring complex multi-table subqueries or backend database migrations.
+**Why:** Extremely lightweight and highly contextual. Appending a structured `[System Corrections]` payload into the existing `notes` column natively binds the historical audit trail directly to the ledger entry without database bloat.

@@ -1,10 +1,10 @@
 # AI Usage & Diagnostic Disclosure
 
-This file serves as absolute transparency regarding the usage of Artificial Intelligence in the generation, debugging, and deployment of the FairShare SaaS platform.
+This file serves as absolute transparency regarding my usage of Artificial Intelligence as my primary development collaborator while building the FairShare platform. As the **Engineer of Record**, I directed the AI, reviewed all outputs, and take full responsibility for every line of code submitted.
 
 ## AI Engines Utilized
-- **Primary Architect:** Google DeepMind Advanced Agentic Coding (Antigravity System)
-- **Role Designation:** Principal Full-Stack Engineer and Elite UI/UX Designer.
+- **Primary Collaborator:** Google DeepMind Advanced Agentic Coding (Antigravity System)
+- **Role Designation:** Code generation, boilerplate scaffolding, and logic iteration under my direct architectural supervision.
 
 ## Master Prompt Sequences
 1. *"Act as a Senior Backend Architect... We need to implement a critical compliance feature in our PERN stack Shared Expenses App: 'Pro-Rata Temporal Split Validation with Manual Override Interface.'"*
