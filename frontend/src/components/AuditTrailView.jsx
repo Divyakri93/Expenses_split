@@ -13,11 +13,11 @@ const AuditTrailView = ({ groupId }) => {
 
   useEffect(() => {
     if (groupId) {
-        axios.get(`http://localhost:5000/api/groups/${groupId}/members`)
+        axios.get(`/api/groups/${groupId}/members`)
             .then(res => setMembers(res.data.members))
             .catch(err => console.error("Failed to fetch members", err));
             
-        axios.get(`http://localhost:5000/api/expenses/settlements/${groupId}`)
+        axios.get(`/api/expenses/settlements/${groupId}`)
             .then(res => setSettlements(res.data.settlements || []))
             .catch(err => console.error("Failed to fetch settlements", err));
     }
@@ -33,7 +33,7 @@ const AuditTrailView = ({ groupId }) => {
 
     setLoading(true);
     try {
-      const res = await axios.get(`http://localhost:5000/api/expenses/audit/${userId}`);
+      const res = await axios.get(`/api/expenses/audit/${userId}`);
       setAuditData(prev => ({ ...prev, [userId]: res.data.auditTrail }));
     } catch (err) {
       console.error(err);

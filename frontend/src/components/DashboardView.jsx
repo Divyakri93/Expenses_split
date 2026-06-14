@@ -16,7 +16,7 @@ const DashboardView = () => {
     // we will add some graceful error handling or mock data fallback.
     const fetchSettlements = async () => {
       try {
-        const response = await axios.get(`http://localhost:5000/api/expenses/settlements/${groupId}`);
+        const response = await axios.get(`/api/expenses/settlements/${groupId}`);
         setSettlements(response.data.settlements);
         setBalances(response.data.rawBalances);
       } catch (error) {

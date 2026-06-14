@@ -18,7 +18,7 @@ const ChatView = ({ groupId }) => {
         // Fetch history
         const fetchHistory = async () => {
             try {
-                const res = await axios.get(`http://localhost:5000/api/messages/${groupId}`);
+                const res = await axios.get(`/api/messages/${groupId}`);
                 setMessages(res.data.messages);
                 scrollToBottom();
             } catch (err) {
@@ -29,7 +29,7 @@ const ChatView = ({ groupId }) => {
         fetchHistory();
 
         // Connect Socket
-        const newSocket = io('http://localhost:5000');
+        const newSocket = io('');
         
         newSocket.on('connect', () => {
             newSocket.emit('join_group', groupId);
@@ -61,7 +61,7 @@ const ChatView = ({ groupId }) => {
         setInputText(''); // optimistic clear
 
         try {
-            await axios.post(`http://localhost:5000/api/messages/${groupId}`, { content });
+            await axios.post(`/api/messages/${groupId}`, { content });
         } catch (err) {
             console.error("Failed to send message", err);
         }

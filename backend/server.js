@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
+const path = require('path');
 require('dotenv').config();
 
 const { sequelize } = require('./models');
@@ -44,6 +45,15 @@ io.on('connection', (socket) => {
     console.log('User disconnected:', socket.id);
   });
 });
+
+// Serve frontend static files in production
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, '../frontend/dist')));
+
+  app.get('*', (req, res) => {
+    res.sendFile(path.resolve(__dirname, '../frontend/dist', 'index.html'));
+  });
+}
 
 // Sync Database and Start
 const PORT = process.env.PORT || 5000;

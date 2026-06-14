@@ -41,7 +41,7 @@ const AddExpenseForm = ({ groupId, members, onExpenseAdded }) => {
       
       setLoading(true);
       try {
-          await axios.post(`http://localhost:5000/api/expenses/${groupId}`, {
+          await axios.post(`/api/expenses/${groupId}`, {
               description,
               paid_by_user_id: paidBy,
               amount: Number(amount),

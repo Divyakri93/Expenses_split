@@ -25,32 +25,40 @@ const GroupDetail = () => {
     const [emailToAdd, setEmailToAdd] = useState('');
 
     useEffect(() => {
-        fetchGroupDetails();
-    }, [groupId]);
-
     const fetchGroupDetails = async () => {
         try {
             // Get user's groups to find the name (cheap way)
-            const gRes = await axios.get('http://localhost:5000/api/groups');
+            const gRes = await axios.get('/api/groups');
             const grp = gRes.data.groups.find(g => g.id.toString() === groupId);
             if(grp) setGroupName(grp.name);
+        } catch (err) {
+            console.error(err);
+        }
+    };
 
+    const fetchMembers = async () => {
+        try {
             // Get members
-            const mRes = await axios.get(`http://localhost:5000/api/groups/${groupId}/members`);
+            const mRes = await axios.get(`/api/groups/${groupId}/members`);
             setMembers(mRes.data.members);
         } catch (err) {
             console.error(err);
         }
     };
 
+    useEffect(() => {
+        fetchGroupDetails();
+        fetchMembers();
+    }, [groupId]);
+
     const handleAddMember = async (e) => {
         e.preventDefault();
         if(!emailToAdd) return;
         try {
-            await axios.post(`http://localhost:5000/api/groups/${groupId}/members`, { email: emailToAdd });
+            await axios.post(`/api/groups/${groupId}/members`, { email: emailToAdd });
             setShowAddMember(false);
             setEmailToAdd('');
-            fetchGroupDetails();
+            fetchMembers();
             alert('Member added successfully!');
         } catch (err) {
             alert(err.response?.data?.error || 'Failed to add member');
@@ -59,7 +67,7 @@ const GroupDetail = () => {
 
     const handleExportCSV = async () => {
         try {
-            const response = await axios.get(`http://localhost:5000/api/expenses/${groupId}/export-csv`, {
+            const response = await axios.get(`/api/expenses/${groupId}/export-csv`, {
                 responseType: 'blob', // crucial for downloading files
             });
             const url = window.URL.createObjectURL(new Blob([response.data]));

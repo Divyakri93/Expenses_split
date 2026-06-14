@@ -8,7 +8,7 @@ const CSVChangesLog = ({ groupId }) => {
 
   useEffect(() => {
     if (groupId) {
-      axios.get(`http://localhost:5000/api/expenses/${groupId}/all`)
+      axios.get(`/api/expenses/${groupId}/all`)
         .then(res => {
           // Filter expenses that have [System Corrections] in their notes
           const expensesWithChanges = res.data.expenses.filter(exp => 

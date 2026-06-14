@@ -180,7 +180,7 @@ const CSVProcessingWizard = () => {
     formData.append('file', file);
 
     try {
-      const res = await axios.post('http://localhost:5000/api/expenses/import', formData, {
+      const res = await axios.post('/api/expenses/import', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       setProcessedRows(res.data.rows);
@@ -216,7 +216,7 @@ const CSVProcessingWizard = () => {
   const handleCommit = async () => {
     try {
       const validRows = processedRows.filter(r => r.status !== 'error' && !r.rejected);
-      const res = await axios.post('http://localhost:5000/api/expenses/commit', {
+      const res = await axios.post('/api/expenses/commit', {
         fileName: file ? file.name : 'Unknown File',
         rows: validRows
       });

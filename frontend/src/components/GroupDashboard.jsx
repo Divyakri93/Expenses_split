@@ -20,7 +20,7 @@ const GroupDashboard = () => {
 
   const fetchGroups = async () => {
     try {
-      const res = await axios.get('http://localhost:5000/api/groups');
+      const res = await axios.get('/api/groups');
       setGroups(res.data.groups);
     } catch (err) {
       console.error(err);
@@ -32,7 +32,7 @@ const GroupDashboard = () => {
   const handleCreateGroup = async (e) => {
     e.preventDefault();
     try {
-      await axios.post('http://localhost:5000/api/groups', { name: newGroupName, currency: newGroupCurrency });
+      await axios.post('/api/groups', { name: newGroupName, currency: newGroupCurrency });
       setShowModal(false);
       setNewGroupName('');
       fetchGroups();
@@ -51,7 +51,7 @@ const GroupDashboard = () => {
     formData.append('file', file);
 
     try {
-      const res = await axios.post('http://localhost:5000/api/expenses/global-import', formData, {
+      const res = await axios.post('/api/expenses/global-import', formData, {
           headers: { 'Content-Type': 'multipart/form-data' }
       });
       navigate(`/group/${res.data.groupId}?tab=audit`);
