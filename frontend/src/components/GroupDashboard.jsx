@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import axios from 'axios';
 import { AuthContext } from '../context/AuthContext';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, Users, Shield, UploadCloud } from 'lucide-react';
+import { Plus, Users, Shield, UploadCloud, Trash2 } from 'lucide-react';
 
 const GroupDashboard = () => {
   const { user } = useContext(AuthContext);
@@ -39,6 +39,24 @@ const GroupDashboard = () => {
     } catch (err) {
       console.error(err);
       alert('Failed to create group');
+    }
+  };
+
+  const handleDeleteGroup = async (e, groupId, role) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (role !== 'admin') {
+      alert('Only admins can delete this group.');
+      return;
+    }
+    if (window.confirm('Are you sure you want to delete this group and all its expenses? This cannot be undone.')) {
+      try {
+        await axios.delete(`/api/groups/${groupId}`);
+        fetchGroups();
+      } catch (err) {
+        console.error(err);
+        alert(err.response?.data?.error || 'Failed to delete group');
+      }
     }
   };
 
@@ -107,9 +125,20 @@ const GroupDashboard = () => {
                     {group.currency}
                  </span>
               </div>
-              <div className="mt-auto flex items-center text-sm text-slate-500">
-                 {group.role === 'admin' ? <Shield className="h-4 w-4 mr-1 text-emerald-500" /> : <Users className="h-4 w-4 mr-1" />}
-                 {group.role === 'admin' ? 'Admin' : 'Member'}
+              <div className="mt-auto flex items-center justify-between">
+                 <div className="flex items-center text-sm text-slate-500">
+                    {group.role === 'admin' ? <Shield className="h-4 w-4 mr-1 text-emerald-500" /> : <Users className="h-4 w-4 mr-1" />}
+                    {group.role === 'admin' ? 'Admin' : 'Member'}
+                 </div>
+                 {group.role === 'admin' && (
+                    <button 
+                       onClick={(e) => handleDeleteGroup(e, group.id, group.role)}
+                       className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-colors"
+                       title="Delete Group"
+                    >
+                       <Trash2 className="h-4 w-4" />
+                    </button>
+                 )}
               </div>
             </div>
           </Link>

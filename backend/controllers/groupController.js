@@ -107,4 +107,27 @@ exports.getAllUsers = async (req, res) => {
     } catch(err) {
         res.status(500).json({ error: 'Failed to fetch users' });
     }
-}
+};
+
+exports.deleteGroup = async (req, res) => {
+    try {
+        const { groupId } = req.params;
+        const reqUserId = req.user.id;
+
+        // Verify req user is admin of this group
+        const adminCheck = await GroupMember.findOne({
+            where: { group_id: groupId, user_id: reqUserId, role: 'admin' }
+        });
+        if (!adminCheck) return res.status(403).json({ error: 'Must be an admin to delete the group' });
+
+        const group = await Group.findByPk(groupId);
+        if (!group) return res.status(404).json({ error: 'Group not found' });
+
+        await group.destroy(); // Cascade delete handles related records
+
+        res.json({ message: 'Group deleted successfully' });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to delete group' });
+    }
+};

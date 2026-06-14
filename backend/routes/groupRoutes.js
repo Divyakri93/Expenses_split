@@ -1,6 +1,6 @@
 const express = require('express');
 const { protect } = require('../middleware/authMiddleware');
-const { getUserGroups, createGroup, addMember, getGroupMembers, getAllUsers } = require('../controllers/groupController');
+const { getUserGroups, createGroup, addMember, getGroupMembers, getAllUsers, deleteGroup } = require('../controllers/groupController');
 
 const router = express.Router();
 
@@ -12,5 +12,7 @@ router.get('/:groupId/members', protect, getGroupMembers);
 
 // Helper route to list all users for demo dropdowns
 router.get('/users/all', protect, getAllUsers);
+
+router.delete('/:groupId', protect, deleteGroup);
 
 module.exports = router;
