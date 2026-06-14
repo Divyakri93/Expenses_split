@@ -13,7 +13,7 @@ const GroupDetail = () => {
     const { groupId } = useParams();
     const location = useLocation();
     const { user } = useContext(AuthContext);
-    
+
     // Parse ?tab=xxx from URL
     const queryParams = new URLSearchParams(location.search);
     const initialTab = queryParams.get('tab') || 'chat';
@@ -25,40 +25,32 @@ const GroupDetail = () => {
     const [emailToAdd, setEmailToAdd] = useState('');
 
     useEffect(() => {
+        fetchGroupDetails();
+    }, [groupId]);
+
     const fetchGroupDetails = async () => {
         try {
             // Get user's groups to find the name (cheap way)
-            const gRes = await axios.get('/api/groups');
+            const gRes = await axios.get('http://localhost:5000/api/groups');
             const grp = gRes.data.groups.find(g => g.id.toString() === groupId);
-            if(grp) setGroupName(grp.name);
-        } catch (err) {
-            console.error(err);
-        }
-    };
+            if (grp) setGroupName(grp.name);
 
-    const fetchMembers = async () => {
-        try {
             // Get members
-            const mRes = await axios.get(`/api/groups/${groupId}/members`);
+            const mRes = await axios.get(`http://localhost:5000/api/groups/${groupId}/members`);
             setMembers(mRes.data.members);
         } catch (err) {
             console.error(err);
         }
     };
 
-    useEffect(() => {
-        fetchGroupDetails();
-        fetchMembers();
-    }, [groupId]);
-
     const handleAddMember = async (e) => {
         e.preventDefault();
-        if(!emailToAdd) return;
+        if (!emailToAdd) return;
         try {
-            await axios.post(`/api/groups/${groupId}/members`, { email: emailToAdd });
+            await axios.post(`http://localhost:5000/api/groups/${groupId}/members`, { email: emailToAdd });
             setShowAddMember(false);
             setEmailToAdd('');
-            fetchMembers();
+            fetchGroupDetails();
             alert('Member added successfully!');
         } catch (err) {
             alert(err.response?.data?.error || 'Failed to add member');
@@ -67,7 +59,7 @@ const GroupDetail = () => {
 
     const handleExportCSV = async () => {
         try {
-            const response = await axios.get(`/api/expenses/${groupId}/export-csv`, {
+            const response = await axios.get(`http://localhost:5000/api/expenses/${groupId}/export-csv`, {
                 responseType: 'blob', // crucial for downloading files
             });
             const url = window.URL.createObjectURL(new Blob([response.data]));
@@ -92,10 +84,10 @@ const GroupDetail = () => {
                     <div>
                         <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">{groupName}</h1>
                         <div className="mt-1 flex items-center text-sm text-slate-500">
-                           <Users className="w-4 h-4 mr-1.5" /> {members.length} Members
-                           <button onClick={() => setShowAddMember(!showAddMember)} className="ml-3 text-indigo-600 hover:text-indigo-800 font-medium inline-flex items-center">
-                               <UserPlus className="w-3.5 h-3.5 mr-1" /> Add Member
-                           </button>
+                            <Users className="w-4 h-4 mr-1.5" /> {members.length} Members
+                            <button onClick={() => setShowAddMember(!showAddMember)} className="ml-3 text-indigo-600 hover:text-indigo-800 font-medium inline-flex items-center">
+                                <UserPlus className="w-3.5 h-3.5 mr-1" /> Add Member
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -111,12 +103,12 @@ const GroupDetail = () => {
                 <form onSubmit={handleAddMember} className="bg-indigo-50 p-4 rounded-xl border border-indigo-100 flex gap-4 items-end">
                     <div className="flex-1 max-w-sm">
                         <label className="block text-sm font-medium text-indigo-900 mb-1">Enter User's Email Address</label>
-                        <input 
-                            type="email" 
-                            required 
+                        <input
+                            type="email"
+                            required
                             placeholder="user@example.com"
-                            value={emailToAdd} 
-                            onChange={e=>setEmailToAdd(e.target.value)} 
+                            value={emailToAdd}
+                            onChange={e => setEmailToAdd(e.target.value)}
                             className="w-full rounded-lg border-indigo-200 px-3 py-2 border focus:ring-indigo-500"
                         />
                     </div>

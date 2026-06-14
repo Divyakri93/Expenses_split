@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
-const path = require('path');
 require('dotenv').config();
 
 const { sequelize } = require('./models');
@@ -13,9 +12,13 @@ const messageRoutes = require('./routes/messageRoutes');
 
 const app = express();
 const server = http.createServer(app);
+const allowedOrigins = process.env.FRONTEND_URL 
+  ? ["http://127.0.0.1:5173", "http://localhost:5173", process.env.FRONTEND_URL]
+  : ["http://127.0.0.1:5173", "http://localhost:5173"];
+
 const io = new Server(server, {
   cors: {
-    origin: "http://127.0.0.1:5173", // Vite default
+    origin: allowedOrigins,
     methods: ["GET", "POST"]
   }
 });
@@ -23,7 +26,9 @@ const io = new Server(server, {
 // Expose io to routes
 app.set('io', io);
 
-app.use(cors());
+app.use(cors({
+  origin: allowedOrigins
+}));
 app.use(express.json());
 
 // Main Routers
@@ -45,15 +50,6 @@ io.on('connection', (socket) => {
     console.log('User disconnected:', socket.id);
   });
 });
-
-// Serve frontend static files in production
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../frontend/dist')));
-
-  app.get('*', (req, res) => {
-    res.sendFile(path.resolve(__dirname, '../frontend/dist', 'index.html'));
-  });
-}
 
 // Sync Database and Start
 const PORT = process.env.PORT || 5000;

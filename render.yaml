@@ -1,10 +1,10 @@
 services:
   - type: web
-    name: fairshare-expenses
+    name: fairshare-backend
     env: node
-    region: ohio
-    buildCommand: "cd backend && npm install && cd ../frontend && npm install && npm run build"
-    startCommand: "cd backend && node server.js"
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: node server.js
     envVars:
       - key: NODE_ENV
         value: production
@@ -12,6 +12,21 @@ services:
         fromDatabase:
           name: fairshare-db
           property: connectionString
+      - key: FRONTEND_URL
+        value: https://fairshare-frontend.onrender.com
+
+  - type: web
+    name: fairshare-frontend
+    env: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        fromService:
+          type: web
+          name: fairshare-backend
+          envVarKey: RENDER_EXTERNAL_URL
 
 databases:
   - name: fairshare-db
