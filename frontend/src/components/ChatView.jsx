@@ -29,8 +29,8 @@ const ChatView = ({ groupId }) => {
         fetchHistory();
 
         // Connect Socket
-        const newSocket = io(import.meta.env.VITE_API_URL || '');
-        
+        const newSocket = io('');
+
         newSocket.on('connect', () => {
             newSocket.emit('join_group', groupId);
         });
@@ -114,8 +114,8 @@ const ChatView = ({ groupId }) => {
             {/* Input Area */}
             <div className="bg-white border-t border-slate-200 p-4">
                 <form onSubmit={handleSendMessage} className="flex gap-3">
-                    <input 
-                        type="text" 
+                    <input
+                        type="text"
                         value={inputText}
                         onChange={(e) => setInputText(e.target.value)}
                         placeholder="Type a message..."
