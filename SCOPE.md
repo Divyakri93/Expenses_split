@@ -20,6 +20,8 @@ The `csvSanitizer.js` engine intercepts the following structural and logical vio
 | 10 | Foreign Currency Adds | `amount` specified in foreign symbols ($/€). | Converts to `INR` via static exchange rate mapping before ledger entry. |
 | 11 | Negative Inversion | `amount < 0` | Converts to positive value and flags as a Credit/Refund structure. |
 | 12 | Temporal Boundary Violation | Expense `date` falls outside the user's `joined_at` -> `left_at` window. | Flags `Anomaly`. Suggests a Pro-Rata adjusted split dynamically excluding the inactive member. |
+| 13 | Post-Exit Member Billed | Expense date falls after a member's `left_at` date. | Flags `Anomaly`. Auto-calculates 0 active days for the departed member and suggests a dynamic pro-rata split excluding them. |
+| 14 | Mid-Month Joiner | Expense date falls in the same month a member joined. | Flags `Anomaly`. Calculates exact active days (e.g., 23/30 days) to propose an accurate mathematically weighted pro-rata split. |
 
 ## 2. PostgreSQL Entity-Relationship (ER) Schema
 
