@@ -28,3 +28,21 @@ This document serves as an analytical ledger for the core architectural crossroa
 
 **Decision Chosen:** Interactive Interception (The Glassmorphic Validation Stream)
 - *Technical Justification:* Trust is the most critical metric for a financial application. By sequentially presenting all 12 anomalies to the user (highlighting them in Amber/Purple UI states), the system shifts the liability of data mutation to the user. The backend engine provides "Smart Suggested Fixes" (such as dynamic Pro-Rata Math), but enforces explicit user consent (clicking "Accept") before proceeding.
+
+## 4. Resolving Advanced Temporal Anomalies (Mid-Month Joiners & Post-Exit Billing)
+
+**Alternative Considered:** Hard Rejection / Blocked Imports
+- *Pros:* Strict enforcement of rules guarantees the ledger only contains 100% valid rows without needing complex extrapolation algorithms.
+- *Cons:* Terrible user experience. If a user pastes 200 rows of an apartment ledger, blocking the import because one member moved out 2 days early forces the user to manually recalculate fractional math outside the app.
+
+**Decision Chosen:** Dynamic Pro-Rata Mathematical Interception
+- *Technical Justification:* To maximize convenience without sacrificing accuracy, the backend engine calculates the exact intersection of a member's active temporal window (`joined_at` -> `left_at`) and the expense date. If a member (like Sam) joins mid-month, the engine derives their fractional footprint (e.g., 23/30 days) and instantly proposes a hyper-accurate percentage split to the user. If a member (like Meera) is billed after leaving, it auto-assigns them 0 days and re-distributes their burden proportionally.
+
+## 5. Audit Log Persistence for CSV Corrections
+
+**Alternative Considered:** Isolated `import_logs` Database Table
+- *Pros:* Highly normalized and clean structure for storing the exact keystrokes and structural adjustments made during the CSV Wizard.
+- *Cons:* Adds unnecessary join overhead when fetching expenses, and creates an isolated table that will bloat exponentially over time.
+
+**Decision Chosen:** Serializing Logs into the Expense `notes` Column
+- *Technical Justification:* Extremely lightweight and contextual. Since changes are directly relevant to the specific expense row, appending a structured `[System Corrections]` payload into the existing `notes` column natively binds the historical audit trail directly to the ledger entry. This enables the frontend to effortlessly render the new "CSV Changes Log" tab without requiring complex multi-table subqueries or backend database migrations.
