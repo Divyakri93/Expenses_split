@@ -78,75 +78,11 @@ const calculateConfidence = (a, b) => {
 };
 
 
-exports.processCSV = async (req, res) => {
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
-    const results = [];
-    const processedRows = [];
-
-    const stream = Readable.from(req.file.buffer);
-
-    csv.parseStream(stream, { headers: true })
-        .on('data', (row) => results.push(row))
-        .on('end', async () => {
-            // Fetch all registered users in the database to check against
-            let dbUserNames = new Set();
-            let dbUsers = [];
-            try {
-                dbUsers = await User.findAll({ attributes: ['id', 'name'] });
-                dbUserNames = new Set(dbUsers.map(u => u.name.trim().toLowerCase()));
-            } catch (err) {
-                console.error('Error fetching registered users:', err);
-            }
-
-            // Fetch existing expenses + splits for DB duplicate detection
-            const targetGroupId = req.body ? req.body.groupId : null;
-            let dbExpenses = [];
-            let groupGuests = [];
-            try {
-                const expQuery = {
-                    where: { status: 'active' },
-                    include: [{ model: ExpenseSplit }]
-                };
-                if (targetGroupId) {
-                    expQuery.where.group_id = targetGroupId;
-                    groupGuests = await Guest.findAll({ where: { group_id: targetGroupId } });
-                }
-                dbExpenses = await Expense.findAll(expQuery);
-            } catch (err) {
-                console.error('Error fetching DB expenses for duplicate check:', err);
-            }
-
-            // Build name → id lookup maps
-            const userByNameMap = {};
-            dbUsers.forEach(u => { userByNameMap[u.name.trim().toLowerCase()] = u.id; });
-            const guestByNameMap = {};
-            groupGuests.forEach(g => { guestByNameMap[g.name.trim().toLowerCase()] = g.id; });
-
-            // Helper: resolve payer name to prefixed id string
-            const getPrefixedId = (name) => {
-                const lc = (name || '').trim().toLowerCase();
-                if (userByNameMap[lc]) return `user_${userByNameMap[lc]}`;
-                if (guestByNameMap[lc]) return `guest_${guestByNameMap[lc]}`;
-                return null;
-            };
-
-            // Build O(1) DB lookup map: "date_amount_payerId_currency" → [expense]
-            const dbMap = new Map();
-            dbExpenses.forEach(exp => {
-                const payerId = exp.paid_by_user_id
-                    ? `user_${exp.paid_by_user_id}`
-                    : `guest_${exp.paid_by_guest_id}`;
-                const curr = (exp.currency || 'INR').toLowerCase();
-                const key = `${exp.date}_${exp.amount}_${payerId}_${curr}`;
-                if (!dbMap.has(key)) dbMap.set(key, []);
-                dbMap.get(key).push(exp);
-            });
-
-            // Batch duplicate map: "date_amount_payerName_currency" → parsedRow
-            const processedMap = new Map();
-
-            const getCaseInsensitiveMatch = (name, list) => {
+const createRowValidator = (context) => {
+    const { ACTIVE_MEMBERS, dbUserNames, EXCHANGE_RATES, MOCK_MEMBER_DATES, dbMap, processedMap, getPrefixedId, levenshtein } = context;
+    
+    const getCaseInsensitiveMatch = (name, list) => {
                 if (!name) return null;
                 const lowercase = name.trim().toLowerCase();
                 return list.find(item => item.toLowerCase() === lowercase);
@@ -184,18 +120,23 @@ exports.processCSV = async (req, res) => {
             };
 
             // Process Policies
-            results.forEach((row, index) => {
-                let warnings = [];
+    
+    return (row, index) => {
+        let warnings = [];
                 let errors = [];
-                let parsedRow = { ...row, original_index: index };
+                
 
-                // 5. Missing Obligatory Values
-                if (!row.description) errors.push('Missing description');
-                if (!row.paid_by) errors.push('Missing paid_by');
+                let parsedRow = { ...row, _raw_csv_row: { ...row }, original_index: index };
 
-                if (!row.amount) {
-                    errors.push('Missing amount');
-                    return processedRows.push({ data: parsedRow, errors, warnings, status: 'error' });
+                let missingFields = [];
+                if (!row.description) missingFields.push('description');
+                if (!row.paid_by) missingFields.push('paid_by');
+                if (!row.amount) missingFields.push('amount');
+                if (!row.date) missingFields.push('date');
+
+                if (missingFields.length > 0) {
+                    parsedRow.missing_fields = missingFields;
+                    return { data: parsedRow, errors: [`Missing mandatory fields: ${missingFields.join(', ')}`], warnings, status: 'needs_resolution' };
                 }
 
                 // 4. Resolve Payer Name (exact/case-insensitive only — fuzzy via typo_suggestions)
@@ -656,19 +597,151 @@ exports.processCSV = async (req, res) => {
 
                 parsedRow.anomaly = anomaly;
 
-                processedRows.push({
+                return {
                     data: parsedRow,
                     errors,
                     warnings,
                     status: errors.length > 0 ? 'error' : (warnings.length > 0 ? 'warning' : 'ok')
-                });
+                };
+    };
+};
+
+exports.processCSV = async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+    const results = [];
+    const processedRows = [];
+
+    const stream = Readable.from(req.file.buffer);
+
+    csv.parseStream(stream, { headers: true })
+        .on('data', (row) => results.push(row))
+        .on('end', async () => {
+            // Fetch all registered users in the database to check against
+            let dbUserNames = new Set();
+            let dbUsers = [];
+            try {
+                dbUsers = await User.findAll({ attributes: ['id', 'name'] });
+                dbUserNames = new Set(dbUsers.map(u => u.name.trim().toLowerCase()));
+            } catch (err) {
+                console.error('Error fetching registered users:', err);
+            }
+
+            // Fetch existing expenses + splits for DB duplicate detection
+            const targetGroupId = req.body ? req.body.groupId : null;
+            let dbExpenses = [];
+            let groupGuests = [];
+            try {
+                const expQuery = {
+                    where: { status: 'active' },
+                    include: [{ model: ExpenseSplit }]
+                };
+                if (targetGroupId) {
+                    expQuery.where.group_id = targetGroupId;
+                    groupGuests = await Guest.findAll({ where: { group_id: targetGroupId } });
+                }
+                dbExpenses = await Expense.findAll(expQuery);
+            } catch (err) {
+                console.error('Error fetching DB expenses for duplicate check:', err);
+            }
+
+            // Build name → id lookup maps
+            const userByNameMap = {};
+            dbUsers.forEach(u => { userByNameMap[u.name.trim().toLowerCase()] = u.id; });
+            const guestByNameMap = {};
+            groupGuests.forEach(g => { guestByNameMap[g.name.trim().toLowerCase()] = g.id; });
+
+            // Helper: resolve payer name to prefixed id string
+            const getPrefixedId = (name) => {
+                const lc = (name || '').trim().toLowerCase();
+                if (userByNameMap[lc]) return `user_${userByNameMap[lc]}`;
+                if (guestByNameMap[lc]) return `guest_${guestByNameMap[lc]}`;
+                return null;
+            };
+
+            // Build O(1) DB lookup map: "date_amount_payerId_currency" → [expense]
+            const dbMap = new Map();
+            dbExpenses.forEach(exp => {
+                const payerId = exp.paid_by_user_id
+                    ? `user_${exp.paid_by_user_id}`
+                    : `guest_${exp.paid_by_guest_id}`;
+                const curr = (exp.currency || 'INR').toLowerCase();
+                const key = `${exp.date}_${exp.amount}_${payerId}_${curr}`;
+                if (!dbMap.has(key)) dbMap.set(key, []);
+                dbMap.get(key).push(exp);
             });
 
-            res.json({ rows: processedRows });
+            // Batch duplicate map: "date_amount_payerName_currency" → parsedRow
+            const processedMap = new Map();
+
+
+            const validator = createRowValidator({ ACTIVE_MEMBERS, dbUserNames, EXCHANGE_RATES, MOCK_MEMBER_DATES, dbMap, processedMap, getPrefixedId, levenshtein });
+            results.forEach((row, index) => {
+                processedRows.push(validator(row, index));
+            });
+                        res.json({ rows: processedRows });
         });
 };
 exports.commitData = async (req, res) => {
-    const { rows, fileName, resolutions = {} } = req.body;
+    const { rows, fileName, resolutions = {}, corrections = {} } = req.body;
+
+    const hasCorrections = Object.keys(corrections).length > 0;
+    
+    // We need to fetch DB state if we have corrections
+    let dbUserNames = new Set();
+    let dbUsers = [];
+    let groupGuests = [];
+    let dbExpenses = [];
+    
+    if (hasCorrections) {
+        dbUsers = await User.findAll({ attributes: ['id', 'name'] });
+        dbUserNames = new Set(dbUsers.map(u => u.name.trim().toLowerCase()));
+        
+        // Target group doesn't exist yet, so we just pass what we can
+        dbExpenses = await Expense.findAll({ where: { status: 'active' } });
+        
+        const userByNameMap = {};
+        dbUsers.forEach(u => { userByNameMap[u.name.trim().toLowerCase()] = u.id; });
+        const getPrefixedId = (name) => {
+            const lc = (name || '').trim().toLowerCase();
+            if (userByNameMap[lc]) return `user_${userByNameMap[lc]}`;
+            return null; // guests aren't in DB yet for this group
+        };
+        
+        const dbMap = new Map();
+        dbExpenses.forEach(exp => {
+            const payerId = exp.paid_by_user_id ? `user_${exp.paid_by_user_id}` : `guest_${exp.paid_by_guest_id}`;
+            const curr = (exp.currency || 'INR').toLowerCase();
+            const key = `${exp.date}_${exp.amount}_${payerId}_${curr}`;
+            if (!dbMap.has(key)) dbMap.set(key, []);
+            dbMap.get(key).push(exp);
+        });
+
+        const processedMap = new Map();
+        rows.forEach(r => {
+            if (r.status === 'ok' || r.status === 'warning') {
+                const batchKey = `${r.data.date}_${r.data.amount}_${(r.data.paid_by || '').toLowerCase()}_${(r.data.currency || 'INR').toLowerCase()}`;
+                processedMap.set(batchKey, r.data);
+            }
+        });
+
+        const validator = createRowValidator({ ACTIVE_MEMBERS, dbUserNames, EXCHANGE_RATES, MOCK_MEMBER_DATES, dbMap, processedMap, getPrefixedId, levenshtein });
+
+        for (let i = 0; i < rows.length; i++) {
+            const r = rows[i];
+            if (r.status === 'needs_resolution' && corrections[r.data.original_index]) {
+                const originalRawRow = r.data._raw_csv_row || r.data;
+                const correctedRawRow = { ...originalRawRow, ...corrections[r.data.original_index] };
+                const validated = validator(correctedRawRow, r.data.original_index);
+                rows[i] = validated;
+                
+                if (validated.status === 'ok' || validated.status === 'warning') {
+                    const batchKey = `${validated.data.date}_${validated.data.amount}_${(validated.data.paid_by || '').toLowerCase()}_${(validated.data.currency || 'INR').toLowerCase()}`;
+                    processedMap.set(batchKey, validated.data);
+                }
+            }
+        }
+    }
 
     // 1. Validation: Collect all names that require user resolution
     //    - unknown_members: names with no exact or fuzzy match
