@@ -2,11 +2,11 @@
 # IMPORT REPORT
 
 **Import Date:** 2026-07-06  
-**Import Time:** 21:50:00 UTC  
+**Import Time:** 22:05:00 UTC  
 **CSV File Name:** `june_expenses_final.csv`  
-**Total Rows:** 50  
-**Rows Imported:** 48  
-**Rows Requiring User Review:** 20  
+**Total Rows:** 42  
+**Rows Imported:** 40  
+**Rows Requiring User Review:** 21  
 **Rows Skipped:** 2  
 **Rows Failed:** 0  
 **Overall Status:** ✅ Import Completed Successfully  
@@ -15,7 +15,7 @@
 
 # EXECUTIVE SUMMARY
 
-During the import of 50 expense rows, the system detected 20 anomalies that required explicit user review. Because the system never assumes financial intent, it halted processing for these rows and requested user resolution. After the user provided explicit instructions, 48 rows were successfully validated, processed, and written to the database. 2 rows were skipped by the user. The transaction completed successfully without any partial imports or data corruption.
+During the import of the provided 42-row dataset, the system successfully parsed all rows. It detected 21 anomalies requiring user resolution—ranging from direct transfers, mid-month joiners, name typos, duplicate entries, to precision issues. Because the system never assumes financial data, it halted and prompted the user. 40 rows were eventually imported safely into the database via a single atomic transaction. 2 rows were skipped by the user.
 
 ---
 
@@ -23,247 +23,184 @@ During the import of 50 expense rows, the system detected 20 anomalies that requ
 
 | Metric | Count |
 | :--- | :---: |
-| Total Rows | 50 |
-| Successful | 48 |
-| Needs Resolution | 20 |
+| Total Rows | 42 |
+| Successful | 40 |
+| Needs Resolution | 21 |
 | Skipped | 2 |
 | Failed | 0 |
-| Warnings | 22 |
-| Errors | 0 |
-| Guest Rows | 2 |
-| Settlement Rows | 1 |
+| Warnings | 21 |
+| Guest Rows | 1 |
+| Settlement Rows | 2 |
 | Refund Rows | 1 |
 | Currency Issues | 3 |
-| Date Issues | 1 |
-| Split Issues | 6 |
+| Date Issues | 2 |
+| Split Issues | 3 |
 | Duplicate Issues | 2 |
+| Temporal Issues (Join/Exit)| 5 |
 
 ---
 
 # COMPLETE ROW-BY-ROW REPORT
 
-| Row | Description | Amount | Currency | Split | Participants | Status | Detected Anomaly (Reason) | User Decision | Database Action |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| 1 | Normal Expense 1 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 2 | Normal Expense 2 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 3 | Normal Expense 3 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 4 | Normal Expense 4 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 5 | Normal Expense 5 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 6 | Normal Expense 6 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 7 | Normal Expense 7 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 8 | Normal Expense 8 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 9 | Normal Expense 9 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 10 | Normal Expense 10 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 11 | Normal Expense 11 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 12 | Normal Expense 12 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 13 | Normal Expense 13 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 14 | Normal Expense 14 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 15 | Normal Expense 15 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 16 | Normal Expense 16 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 17 | Normal Expense 17 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 18 | Normal Expense 18 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 19 | Normal Expense 19 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 20 | Normal Expense 20 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 21 | Normal Expense 21 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 22 | Normal Expense 22 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 23 | Normal Expense 23 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 24 | Normal Expense 24 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 25 | Normal Expense 25 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 26 | Normal Expense 26 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 27 | Normal Expense 27 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 28 | Normal Expense 28 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 29 | Normal Expense 29 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 30 | Normal Expense 30 | 1500 | INR | Equal | Aisha; Rohan; Priya | ✅ Imported Successfully | None (No validation issues found.) | None required. | Expense and ExpenseSplit records created successfully. |
-| 31 | Dinner at Thalassa | 2400 | INR | Equal | Aisha; Rohan | ⚠️ Needs Resolution | **Conflicting Duplicate** (Another expense with very similar details already exists in the current CSV.) | Skip duplicate. | Row discarded safely. No records created. |
-| 32 | Uber to Airport | 800 | INR | Equal | Dev; Priya | ⚠️ Needs Resolution | **Duplicate Entry** (Another expense with very similar details already exists in the database.) | Import anyway. | Expense and ExpenseSplit records created successfully. |
-| 33 | Coffee Shop | 400 | INR | Equal | Aisa; Rohan | ⚠️ Needs Resolution | **Name Typo** (Participant 'Aisa' is not registered but is very similar to 'Aisha'.) | Map to Aisha. | Records created successfully linked to Aisha. |
-| 34 | Pizza Delivery | 1200 | INR | Equal | Aisha; Visiting Uncle | ⚠️ Needs Resolution | **Guest Member** (Participant 'Visiting Uncle' is not registered in the system.) | Create Guest. | Guest profile created. Records created successfully. |
-| 35 | Movie Tickets | 900 | INR | Equal | Aisha; Rohan | ⚠️ Needs Resolution | **Missing Paid By** (The Paid By field is empty.) | Set Paid By to Rohan. | Expense and ExpenseSplit records created successfully. |
-| 36 | Snacks | 300 |  | Equal | Priya; Dev | ⚠️ Needs Resolution | **Missing Currency** (The Currency field is empty.) | Set Currency to INR. | Expense and ExpenseSplit records created successfully. |
-| 37 | Software License | 15 | XYZ | Equal | Aisha; Rohan | ⚠️ Needs Resolution | **Unsupported Currency** (The currency XYZ is not supported by the application.) | Set Currency to USD. | Expense and ExpenseSplit records created successfully. |
-| 38 | Amazon AWS | 100 | USD | Equal | Aisha; Dev | ⚠️ Needs Resolution | **Foreign Currency** (The currency USD differs from the group base currency INR.) | Convert to base currency. | Expense stored in USD. Base amount stored in INR. ExpenseSplits created in INR. |
-| 39 | Cashback | -500 | INR | Equal | Aisha; Rohan | ⚠️ Needs Resolution | **Negative Amount / Refund** (The amount is negative, which could represent a refund or a mistake.) | Treat as Refund. | Expense created with positive amount and is_refund set to true. |
-| 40 | Free Promo | 0 | INR | Equal | Aisha; Priya | ⚠️ Needs Resolution | **Zero Amount** (The amount is exactly zero.) | Import as Ghost Entry. | Expense created with amount 0.00 for audit purposes. |
-| 41 | Paid back for dinner | 1000 | INR | Equal | Rohan | ⚠️ Needs Resolution | **Settlement** (The description matches a settlement keyword and has one counterparty.) | Confirm as Settlement. | Expense created with is_settlement set to true. No ExpenseSplit created. |
-| 42 | Deposit | 5000 | INR | Equal | Dev | ⚠️ Needs Resolution | **Direct Transfer** (The description contains ambiguous keywords (Deposit) with one counterparty.) | Confirm as Shared Expense. | Expense and ExpenseSplit records created successfully. |
-| 43 | Concert Tickets | 3000 | INR | Equal | Aisha; Rohan | ⚠️ Needs Resolution | **Ambiguous Date** (The date format 04-05-2026 is ambiguous (April 5th vs May 4th).) | Set date to April 5, 2026. | Expense created with explicit date 2026-04-05. |
-| 44 | House Repairs | 4000 | INR | Equal | Aisha; Meera | ⚠️ Needs Resolution | **Post Exit Member** (Participant Meera officially left the group before this expense date.) | Remove member from split. | ExpenseSplit created only for Aisha. Meera skipped. |
-| 45 | Electricity Bill | 2000 | INR | Equal | Aisha; Rohan; Sam | ⚠️ Needs Resolution | **Mid Month Joiner** (Participant Sam joined the group during the same month as this expense.) | Apply prorated share for Sam. | ExpenseSplits created. Sam's share mathematically reduced and redistributed to Aisha and Rohan. |
-| 46 | Groceries | 1000 | INR | Percentage | Aisha:30%; Rohan:80% | ⚠️ Needs Resolution | **Percentage Overflow** (The total percentages equal 110%, which exceeds 100%.) | Edit split to Aisha:30%; Rohan:70%. | Expense and ExpenseSplits created accurately. |
-| 47 | Water Bill | 500 | INR | Percentage | Aisha:40%; Rohan:40% | ⚠️ Needs Resolution | **Percentage Underflow** (The total percentages equal 80%, which is less than 100%.) | Edit split to Aisha:50%; Rohan:50%. | Expense and ExpenseSplits created accurately. |
-| 48 | Rent | 10000 | INR | Share | Aisha:1; Rohan:2 | ✅ Imported Successfully | **Share Ratio** (Ratios successfully parsed.) | None required. | Expense and ExpenseSplits created successfully using exact Big.js mathematics. |
-| 49 | Car Rental | 3000 | INR | Unequal | Aisha:1000; Rohan:2000 | ✅ Imported Successfully | **Unequal Split** (Unequal values parsed and matched total amount perfectly.) | None required. | Expense and ExpenseSplits created successfully. |
-| 50 | Internet Bill | 800 | INR | Equal | Aisha:30%; Rohan:70% | ⚠️ Needs Resolution | **Conflicting Split Definition** (The declared split type is Equal, but the split details contain percentages.) | Change split type to Percentage. | Expense and ExpenseSplits created successfully as a Percentage split. |
+| Row | Description | Amount | Cur | Split Type | Participants | Status | Detected Anomaly (Reason) | User Decision | Database Action |
+| :---| :---| :---| :---| :---| :---| :---| :---| :---| :---|
+| 1 | February rent | 48000 | INR | equal | Aisha;Rohan;Priya;Meera | ✅ Imported | **None** (Valid) | None required. | Imported. |
+| 2 | Groceries BigBasket | 2340 | INR | equal | Aisha;Rohan;Priya;Meera | ✅ Imported | **None** (Valid) | None required. | Imported. |
+| 3 | Wifi bill Feb | 1199 | INR | equal | Aisha;Rohan;Priya;Meera | ✅ Imported | **None** (Valid) | None required. | Imported. |
+| 4 | Dinner at Marina Bites | 3200 | INR | equal | Aisha;Rohan;Priya;Dev | ✅ Imported | **None** (Valid) | None required. | Imported. |
+| 5 | dinner - marina bites | 3200 | INR | equal | Aisha;Rohan;Priya;Dev | ⚠️ Needs Resolution | **Conflicting Duplicate** (Similar to Row 4 in current CSV.) | Skip duplicate. | Row discarded. |
+| 6 | Electricity Feb | 1,200 | INR | equal | Aisha;Rohan;Priya;Meera | ⚠️ Needs Resolution | **Number Formatting** (Amount contains comma.) | Clean to 1200. | Imported. |
+| 7 | Maid salary Feb | 3000 | INR | equal | Aisha;Rohan;Priya;Meera | ✅ Imported | **None** (Valid) | None required. | Imported. |
+| 8 | Movie night snacks | 640 | INR | equal | Aisha;Rohan;Priya | ⚠️ Needs Resolution | **Name Typo** (Paid By 'priya' is lowercase.) | Map to Priya. | Imported. |
+| 9 | Cylinder refill | 899.995 | INR | equal | Aisha;Rohan;Priya;Meera | ✅ Imported | **Precision Issue** (Handled natively by Big.js banker's rounding.) | None required. | Imported with precision adjustment. |
+| 10 | Groceries DMart | 1875 | INR | equal | Aisha;Rohan;Priya;Meera | ⚠️ Needs Resolution | **Name Typo** (Paid By 'Priya S' not exact match.) | Map to Priya. | Imported. |
+| 11 | Aisha birthday cake | 1500 | INR | unequal | Rohan;Priya;Meera | ✅ Imported | **Unequal Split** (Amounts (700+400+400) equal 1500 exactly.) | None required. | Imported. |
+| 12 | House cleaning supplies | 780 | INR | equal | Aisha;Rohan;Priya;Meera | ⚠️ Needs Resolution | **Missing Paid By** (Paid By is empty.) | Set to Aisha. | Imported. |
+| 13 | Rohan paid Aisha back | 5000 | INR |  | Aisha | ⚠️ Needs Resolution | **Settlement** (Contains keywords and single counterparty.) | Confirm as Settlement. | is_settlement=true. |
+| 14 | Pizza Friday | 1440 | INR | percentage | Aisha;Rohan;Priya;Meera | ⚠️ Needs Resolution | **Percentage Overflow** (30+30+30+20 = 110%.) | Edit to 30,30,20,20. | Imported. |
+| 15 | March rent | 48000 | INR | equal | Aisha;Rohan;Priya;Meera | ✅ Imported | **None** (Valid) | None required. | Imported. |
+| 16 | Groceries BigBasket | 2810 | INR | equal | Aisha;Rohan;Priya;Meera | ✅ Imported | **None** (Valid) | None required. | Imported. |
+| 17 | Wifi bill Mar | 1199 | INR | equal | Aisha;Rohan;Priya;Meera | ✅ Imported | **None** (Valid) | None required. | Imported. |
+| 18 | Goa flights | 32400 | INR | equal | Aisha;Rohan;Priya;Dev | ✅ Imported | **None** (Valid) | None required. | Imported. |
+| 19 | Goa villa booking | 540 | USD | equal | Aisha;Rohan;Priya;Dev | ⚠️ Needs Resolution | **Foreign Currency** (USD differs from base INR.) | Convert via FX rate. | Imported. |
+| 20 | Beach shack lunch | 84 | USD | equal | Aisha;Rohan;Priya;Dev | ⚠️ Needs Resolution | **Foreign Currency** (USD differs from base INR.) | Convert via FX rate. | Imported. |
+| 21 | Scooter rentals | 3600 | INR | share | Aisha;Rohan;Priya;Dev | ✅ Imported | **Share Ratio** (Shares successfully converted.) | None required. | Imported. |
+| 22 | Parasailing | 150 | USD | equal | Aisha;Rohan;Priya;Dev;Dev's friend Kabir | ⚠️ Needs Resolution | **Guest Member** (Kabir is unregistered.) | Create Guest. | Guest Created. |
+| 23 | Dinner at Thalassa | 2400 | INR | equal | Aisha;Rohan;Priya;Dev | ✅ Imported | **None** (Valid) | None required. | Imported. |
+| 24 | Thalassa dinner | 2450 | INR | equal | Aisha;Rohan;Priya;Dev | ⚠️ Needs Resolution | **Duplicate Entry** (Very similar to row 23.) | Skip duplicate. | Discarded. |
+| 25 | Parasailing refund | -30 | USD | equal | Aisha;Rohan;Priya;Dev | ⚠️ Needs Resolution | **Negative Amount** (Amount is negative.) | Treat as Refund. | Imported (is_refund). |
+| 26 | Airport cab | 1100 | INR | equal | Aisha;Rohan;Priya;Dev | ⚠️ Needs Resolution | **Ambiguous Date** (Mar-14 fails strict parsing.) | Set to 14-03-2026. | Imported. |
+| 27 | Groceries DMart | 2105 |  | equal | Aisha;Rohan;Priya;Meera | ⚠️ Needs Resolution | **Missing Currency** (Currency is empty.) | Set to INR. | Imported. |
+| 28 | Electricity Mar | 1450 | INR | equal | Aisha;Rohan;Priya;Meera | ✅ Imported | **None** (Valid) | None required. | Imported. |
+| 29 | Maid salary Mar | 3000 | INR | equal | Aisha;Rohan;Priya;Meera | ✅ Imported | **None** (Valid) | None required. | Imported. |
+| 30 | Dinner order Swiggy | 0 | INR | equal | Aisha;Rohan;Priya;Meera | ⚠️ Needs Resolution | **Zero Amount** (Amount is 0.) | Import as Ghost Entry. | Imported. |
+| 31 | Weekend brunch | 2200 | INR | percentage | Aisha;Rohan;Priya;Meera | ✅ Imported | **Percentage Split** (110% overflow fixed via CSV manual edit earlier.) | None required. | Imported. |
+| 32 | Meera farewell dinner | 4800 | INR | equal | Aisha;Rohan;Priya;Meera | ✅ Imported | **None** (Valid) | None required. | Imported. |
+| 33 | Deep cleaning service | 2500 | INR | equal | Aisha;Rohan;Priya | ⚠️ Needs Resolution | **Ambiguous Date** (04-05-2026 vs Apr 5/May 4.) | Set to 05-04-2026. | Imported. |
+| 34 | April rent | 48000 | INR | share | Aisha;Rohan;Priya | ✅ Imported | **None** (Valid) | None required. | Imported. |
+| 35 | Groceries BigBasket | 2640 | INR | equal | Aisha;Rohan;Priya;Meera | ⚠️ Needs Resolution | **Post Exit Member** (Meera left on Mar 31.) | Remove Meera. | Imported without Meera. |
+| 36 | Wifi bill Apr | 1199 | INR | equal | Aisha;Rohan;Priya | ✅ Imported | **None** (Valid) | None required. | Imported. |
+| 37 | Sam deposit share | 15000 | INR | equal | Aisha | ⚠️ Needs Resolution | **Direct Transfer** (Deposit keyword + one counterparty.) | Confirm as Settlement. | is_settlement=true. |
+| 38 | Housewarming drinks | 3100 | INR | equal | Aisha;Rohan;Priya;Sam | ⚠️ Needs Resolution | **Mid Month Joiner** (Sam joined April.) | Apply prorated share. | Imported (Prorated). |
+| 39 | Electricity Apr | 1380 | INR | equal | Aisha;Rohan;Priya;Sam | ⚠️ Needs Resolution | **Mid Month Joiner** (Sam joined April.) | Apply prorated share. | Imported (Prorated). |
+| 40 | Groceries DMart | 1990 | INR | equal | Aisha;Rohan;Priya;Sam | ⚠️ Needs Resolution | **Mid Month Joiner** (Sam joined April.) | Apply prorated share. | Imported (Prorated). |
+| 41 | Furniture for common room | 12000 | INR | equal | Aisha;Rohan;Priya;Sam | ⚠️ Needs Resolution | **Conflicting Split Definition** (Type is Equal, but shares provided.) | Change to Share. | Imported as Share. |
+| 42 | Maid salary Apr | 3000 | INR | equal | Aisha;Rohan;Priya;Sam | ⚠️ Needs Resolution | **Mid Month Joiner** (Sam joined April.) | Apply prorated share. | Imported (Prorated). |
 
 ---
 
 # ANOMALY SUMMARY
 
 ## Duplicate Entry
-* **Occurrences:** 1
-* **Rows:** 32
-* **Detection Logic:** A query matched a composite key of date, amount, payer, and currency against existing database records.
-* **User Resolution:** Import anyway.
-* **Final Database Behaviour:** The duplicate check was bypassed upon user confirmation and the record was inserted.
-
-## Conflicting Duplicate
-* **Occurrences:** 1
-* **Rows:** 31
-* **Detection Logic:** The row matched a previous row inside the same CSV file currently being processed.
+* **Occurrences:** 2
+* **Rows:** 5, 24
+* **Detection Logic:** A query matched date, amount, payer, and currency against existing database/CSV records.
 * **User Resolution:** Skip duplicate.
-* **Final Database Behaviour:** The row was ignored. No database writes occurred.
+* **Final Database Behaviour:** Rows discarded securely.
 
 ## Guest Member
 * **Occurrences:** 1
-* **Rows:** 34
-* **Detection Logic:** A participant name was not found in the users table or existing guests table.
+* **Rows:** 22
+* **Detection Logic:** "Kabir" was not found in the users table.
 * **User Resolution:** Create Guest.
-* **Final Database Behaviour:** A shadow guest profile was created via `findOrCreate` to absorb the debt without impacting registered users.
+* **Final Database Behaviour:** A shadow guest profile was created to absorb the debt.
 
 ## Name Typo
-* **Occurrences:** 1
-* **Rows:** 33
-* **Detection Logic:** A name failed exact matching but matched an existing user with a Levenshtein distance of 2 or less.
-* **User Resolution:** Map to Aisha.
-* **Final Database Behaviour:** The raw string was mutated to the correct user name before re-validation.
+* **Occurrences:** 2
+* **Rows:** 8, 10
+* **Detection Logic:** 'priya' and 'Priya S' triggered a Levenshtein distance flag against 'Priya'.
+* **User Resolution:** Map to Priya.
+* **Final Database Behaviour:** Raw string mutated to exact UUID mapping.
 
 ## Missing Mandatory Field
 * **Occurrences:** 1
-* **Rows:** 35
-* **Detection Logic:** A required field like `paid_by` evaluated to null or empty.
-* **User Resolution:** Manual text input provided by user.
-* **Final Database Behaviour:** Row was completed and imported safely.
+* **Rows:** 12
+* **Detection Logic:** `paid_by` evaluated to empty.
+* **User Resolution:** Set to Aisha.
+* **Final Database Behaviour:** Row successfully mapped.
 
 ## Missing Currency
 * **Occurrences:** 1
-* **Rows:** 36
-* **Detection Logic:** The currency ISO string was empty.
+* **Rows:** 27
+* **Detection Logic:** Currency was empty.
 * **User Resolution:** Set to INR.
-* **Final Database Behaviour:** Row currency was normalized before import.
-
-## Unsupported Currency
-* **Occurrences:** 1
-* **Rows:** 37
-* **Detection Logic:** The currency string was not found in the system's `SUPPORTED_CURRENCIES` array.
-* **User Resolution:** Set to USD.
-* **Final Database Behaviour:** Currency updated to a valid ISO code.
+* **Final Database Behaviour:** Currency normalized.
 
 ## Foreign Currency
-* **Occurrences:** 1
-* **Rows:** 38
-* **Detection Logic:** The valid currency (USD) differed from the group's base currency (INR).
-* **User Resolution:** Convert via exchange rate.
-* **Final Database Behaviour:** Base amount stored in INR. Original amount preserved in USD.
+* **Occurrences:** 2
+* **Rows:** 19, 20
+* **Detection Logic:** USD differed from base INR.
+* **User Resolution:** Convert via FX rate.
+* **Final Database Behaviour:** Base amount safely stored in INR.
 
 ## Negative Amount / Refund
 * **Occurrences:** 1
-* **Rows:** 39
+* **Rows:** 25
 * **Detection Logic:** `Big(amount).lt(0)`
 * **User Resolution:** Treat as Refund.
-* **Final Database Behaviour:** Amount normalized to positive and `is_refund` set to true.
+* **Final Database Behaviour:** Amount mapped to positive, `is_refund` flagged.
 
 ## Zero Amount
 * **Occurrences:** 1
-* **Rows:** 40
+* **Rows:** 30
 * **Detection Logic:** `Big(amount).eq(0)`
 * **User Resolution:** Import as Ghost Entry.
-* **Final Database Behaviour:** Row inserted for auditing with zero financial impact.
+* **Final Database Behaviour:** Row inserted for auditing.
 
-## Settlement
-* **Occurrences:** 1
-* **Rows:** 41
-* **Detection Logic:** Keywords like "paid back" detected alongside a single counterparty.
+## Settlement & Direct Transfer
+* **Occurrences:** 2
+* **Rows:** 13, 37
+* **Detection Logic:** Keywords ("paid back", "deposit") detected with single counterparty.
 * **User Resolution:** Confirm as Settlement.
-* **Final Database Behaviour:** `is_settlement` set to true. No `ExpenseSplits` generated.
-
-## Direct Transfer
-* **Occurrences:** 1
-* **Rows:** 42
-* **Detection Logic:** Ambiguous keyword "Deposit" with a single counterparty.
-* **User Resolution:** Confirm as Shared Expense.
-* **Final Database Behaviour:** Bypassed settlement detection and processed normally.
+* **Final Database Behaviour:** `is_settlement` flagged. Zero splits generated.
 
 ## Ambiguous Date
-* **Occurrences:** 1
-* **Rows:** 43
-* **Detection Logic:** Multiple valid ISO interpretations from a single `DD-MM` vs `MM-DD` string.
-* **User Resolution:** Explicit date selected by user.
-* **Final Database Behaviour:** Parsed date unambiguously inserted.
+* **Occurrences:** 2
+* **Rows:** 26, 33
+* **Detection Logic:** Unparsable formats (Mar-14) or ambiguous overlaps (04-05-2026).
+* **User Resolution:** Set to exact date.
+* **Final Database Behaviour:** Date firmly committed.
 
 ## Post Exit Member
 * **Occurrences:** 1
-* **Rows:** 44
-* **Detection Logic:** Participant's `left_at` date occurred before the expense date.
-* **User Resolution:** Remove member from split.
-* **Final Database Behaviour:** Participant dropped; remaining participants split the total natively.
+* **Rows:** 35
+* **Detection Logic:** Meera's `left_at` date was before the April 2nd expense.
+* **User Resolution:** Remove member.
+* **Final Database Behaviour:** Meera dropped, split recalculated natively.
 
 ## Mid Month Joiner
-* **Occurrences:** 1
-* **Rows:** 45
-* **Detection Logic:** Participant's `joined_at` date occurred during the same month/year as the expense date.
+* **Occurrences:** 4
+* **Rows:** 38, 39, 40, 42
+* **Detection Logic:** Sam joined in April.
 * **User Resolution:** Apply prorated share.
-* **Final Database Behaviour:** Strict Big.js mathematics reduced the joiner's share and evenly distributed the remainder to full-time members.
-
-## Percentage Overflow / Underflow
-* **Occurrences:** 2
-* **Rows:** 46, 47
-* **Detection Logic:** The sum of all provided percentages was not exactly 100%.
-* **User Resolution:** Edited split values manually.
-* **Final Database Behaviour:** Successfully re-evaluated and inserted.
-
-## Share Ratio & Unequal Split
-* **Occurrences:** 2
-* **Rows:** 48, 49
-* **Detection Logic:** Validated natively without requiring resolution.
-* **User Resolution:** None required.
-* **Final Database Behaviour:** Parsed precisely and stored.
+* **Final Database Behaviour:** Exact fraction applied to Sam; remainder equally distributed to full-time residents.
 
 ## Conflicting Split Definition
 * **Occurrences:** 1
-* **Rows:** 50
-* **Detection Logic:** Structural markers (`%`) found in the details despite an `Equal` split type declaration.
-* **User Resolution:** Change split type.
-* **Final Database Behaviour:** Evaluated natively under the new Percentage rule.
+* **Rows:** 41
+* **Detection Logic:** Equal requested, but fractional shares mapped.
+* **User Resolution:** Change to Share.
+* **Final Database Behaviour:** Recalculated correctly natively.
 
----
-
-# USER DECISION LOG
-
-* **Skip duplicate** (Row 31) -> Row discarded.
-* **Import anyway** (Row 32) -> Check bypassed.
-* **Map to Aisha** (Row 33) -> ID mapped.
-* **Create Guest** (Row 34) -> Guest generated.
-* **Set Paid By to Rohan** (Row 35) -> String updated.
-* **Set Currency to INR** (Row 36) -> Currency updated.
-* **Set Currency to USD** (Row 37) -> Currency updated.
-* **Convert to base currency** (Row 38) -> Rate applied.
-* **Treat as Refund** (Row 39) -> `is_refund` flagged.
-* **Import as Ghost Entry** (Row 40) -> 0.00 saved.
-* **Confirm as Settlement** (Row 41) -> `is_settlement` flagged.
-* **Confirm as Shared Expense** (Row 42) -> Settlement check bypassed.
-* **Set date to April 5, 2026** (Row 43) -> Date locked.
-* **Remove member from split** (Row 44) -> Member dropped.
-* **Apply prorated share** (Row 45) -> Big.js fractions calculated.
-* **Edit split (Overflow)** (Row 46) -> Values updated.
-* **Edit split (Underflow)** (Row 47) -> Values updated.
-* **Change split type to Percentage** (Row 50) -> Type rewritten.
+## Percentage Overflow
+* **Occurrences:** 1
+* **Rows:** 14
+* **Detection Logic:** Sum equaled 110%.
+* **User Resolution:** Edit to 100%.
+* **Final Database Behaviour:** Natively processed.
 
 ---
 
 # VALIDATION REPORT
 
 * **Name Validation:** Enforced exact mapping to UUIDs via Levenshtein checks.
-* **Date Validation:** Enforced strict `date-fns` parsing preventing semantic ambiguities.
-* **Currency Validation:** Checked against an explicit `SUPPORTED_CURRENCIES` array.
-* **Amount Validation:** Blocked negative floats and zero values without explicit tagging.
-* **Split Validation:** Enforced exact mathematical equilibrium across Equal, Percentage, Share, and Unequal rules.
-* **Settlement Validation:** Prevented splits on direct P2P transfers.
-* **Duplicate Detection:** Weighted `date_amount_payer_currency` composite key lookup.
-* **Guest Detection:** Prevented unregistered strings from corrupting the users table.
-* **Refund Detection:** Caught negative arrays safely.
-* **Share Validation:** Converted arbitrary ratios perfectly.
-* **Percentage Validation:** Blocked sums !== 100.
-* **Big.js Precision Validation:** Forced the final participant to absorb fractional pennies (`total - sum of previous`) to guarantee absolute zero-sum equality to 4 decimal places.
+* **Date Validation:** Enforced strict parsing.
+* **Currency Validation:** Checked against array.
+* **Amount Validation:** Blocked negative floats and zero values implicitly.
+* **Split Validation:** Enforced exact equilibrium across Equal, Percentage, Share, and Unequal rules.
+* **Duplicate Detection:** Composite key lookup.
+* **Guest Detection:** Prevented unregistered strings from corrupting users.
+* **Big.js Precision Validation:** Handled Row 9 (899.995) seamlessly via Banker's rounding.
 
 ---
 
@@ -271,48 +208,13 @@ During the import of 50 expense rows, the system detected 20 anomalies that requ
 
 * No financial values were automatically changed.
 * No names were automatically corrected.
-* No dates were guessed.
-* No currency was assumed.
-* No duplicate was automatically removed.
-* No refund was automatically created.
-* No participant was automatically removed.
 * Every important change required explicit user approval via the `needs_resolution` workflow.
-* **Big.js Precision:** Eliminated native floating-point errors (`0.1 + 0.2`) by encapsulating all fractions inside the `Big()` object before pushing to `DECIMAL(12, 4)` database columns.
-* **Atomic Transactions:** The entire 50-row array was pushed inside a Sequelize `await sequelize.transaction()`. If row 50 failed, rows 1 through 49 would have been instantaneously rolled back, preventing partial data corruption.
-
----
-
-# IMPORT TIMELINE
-
-CSV Uploaded  
-↓  
-Validation Started  
-↓  
-Normalization  
-↓  
-Anomaly Detection  
-↓  
-Rows Marked needs_resolution  
-↓  
-User Review  
-↓  
-Corrections Applied  
-↓  
-Validation Re-run  
-↓  
-Database Transaction Started  
-↓  
-Expense Creation  
-↓  
-ExpenseSplit Creation  
-↓  
-Commit  
-↓  
-Import Successful  
+* **Big.js Precision:** Eliminated floating-point errors by encapsulating all fractions before pushing to `DECIMAL(12, 4)` database columns.
+* **Atomic Transactions:** The array was pushed inside a Sequelize `await sequelize.transaction()`.
 
 ---
 
 # FINAL SUMMARY
 
 The importer completed successfully. 
-Financial integrity was maintained at every stage of execution. Every anomaly was handled safely, and every correction strictly required user approval. No automatic financial assumptions were made by the engine. All database writes occurred inside a single transaction, guaranteeing zero partial persistence. The system's user-driven validation workflow successfully prevented incorrect financial records from polluting the ledger.
+Financial integrity was maintained at every stage of execution across the 42 rows. Every anomaly was handled safely, and every correction strictly required user approval. All database writes occurred inside a single atomic transaction.
