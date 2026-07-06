@@ -4,25 +4,28 @@ This document details the engineering specifications of the Ingest & Pipeline Sa
 
 ---
 
-## 1. Automated Anomaly Detection & Resolution Policies
+## 1. Automated Anomaly Detection & Resolution Policies — 16 Total
 
 The `csvSanitizer.js` module treats incoming CSV files as a stream of unverified mutations. For every row, it runs a sequential set of structural checks, intercepts anomalies, and **never commits silently** — every decision is surfaced to the user via the interactive wizard.
 
-| # | CSV Problem | Detection Logic | Resolution Policy |
-|---|---|---|---|
-| **1** | **Payer Omission** | Checks if `paid_by` is null/empty after trim | **Blocked.** Row flagged `CRITICAL_MISSING_DATA`. Database commit suspended until user maps a valid name via UI |
-| **2** | **Comma-Formatted Numbers** | `replace(/[^0-9.-]/g, '')` strips commas, `₹`, `$` etc. | **Arbitrage Protection.** Clean string passed to `Big.js`. Native `parseFloat` banned |
-| **3** | **Floating-Point Overflow** | Detects >2 decimal places (e.g., ₹899.995) | **Banker's Rounding.** `Big.roundHalfEven` clamps to 2dp. Sub-cent fraction absorbed by last member (Zero-Sum) |
-| **4** | **Name Typos / Case Variants** | Levenshtein Distance ≤ 2 against all registered users | **"Did you mean?" Popup.** User picks: remap to existing / keep as Guest / create new User |
-| **5** | **Duplicate Transactions (Batch)** | O(1) Hash Map: `date_amount_payer_currency` key | **Confidence Warning.** 100% exact, 90% description typo, 70% date ±1 day. Split members also compared |
-| **6** | **Duplicate Transactions (DB)** | Pre-scan DB expenses via indexed `dbMap` | **DB Duplicate Warning.** If committed, `[System Note]` appended to expense notes with confidence % and matched ID |
-| **7** | **Non-Standard Date Formats** | `new Date(dateStr)` → ISO 8601 normalization | **Temporal Standardization.** All dates stored as `YYYY-MM-DD` |
-| **8** | **Settlement Entries** | Text mining: "paid back", "settlement", "repaid" | **Rerouted.** `is_settlement: true` bypasses split engine, routes to P2P debt reduction |
-| **9** | **Percentage Sums ≠ 100%** | Sum of split weights checked (e.g., 30+30+30+20=110%) | **Dynamic Normalization.** Weights renormalized: Wᵢ = pᵢ / Σp. User visually verifies |
-| **10** | **Missing Currency** | `currency` column empty or undefined | **Fallback.** Inherits group base currency (default: INR) |
-| **11** | **Multi-Currency (USD/EUR etc.)** | Non-INR currency code detected | **FX Mapping.** Converts to INR base amount using fixed rates. Both original + base stored |
-| **12** | **Negative Amounts** | Amount parsed as negative (e.g., -15000) | **Refund Inversion.** Absolute value used, `is_refund: true` set. Payer credited, split members debited |
-| **13** | **Temporal Frontier Violations** | Cross-references expense date vs. `joined_at`/`left_at` | **Pro-Rata Engine.** MID_MONTH_JOINER and POST_EXIT anomalies detected. Fractional liability computed per active days |
+| # | Code Line | CSV Problem | Detection Logic | Resolution Policy |
+|---|---|---|---|---|
+| **1** | 192 | **Missing Description** | `!row.description` check | **Blocked.** Row status = `error`. Commit suspended until user fills it |
+| **2** | 194 | **Missing Payer (paid_by)** | `!row.paid_by` check | **Blocked.** Row status = `error`. Commit suspended until user maps a payer |
+| **3** | 196 | **Missing Amount** | `!row.amount` check | **Blocked immediately.** No further processing on this row |
+| **4** | 259 | **Name Typo / Fuzzy Match** | Levenshtein distance ≤ 2 vs all registered users | **"Did you mean?" Popup.** 3-way user choice: remap / Guest / new User |
+| **5** | 254 | **Unknown Participant** | No exact match AND no fuzzy match (distance > 2) | **Warning.** `unknown_members[]` array populated. User resolves via UI |
+| **6** | 267 | **Comma-Formatted Numbers (1,500)** | `replace(/[^0-9.-]/g, '')` strips commas, `₹`, `$` etc. | **Arbitrage Protection.** Clean string → `Big.js`. Native `parseFloat` banned |
+| **7** | 278 | **Negative Amount (Refund)** | `amountBig.lt(0)` check | **Refund Inversion.** `is_refund: true`. Payer credited, split members debited |
+| **8** | 285 | **Settlement Logged as Expense** | Keyword: `"paid back"`, `"settlement"`, `"repaid"` | **Rerouted.** `is_settlement: true` — bypasses split engine, routes to P2P debt engine |
+| **9** | 294 | **Non-Standard Date Formats** | `new Date(str)` + DD/MM/YYYY fallback parser | **Temporal Standardization.** All dates stored as `YYYY-MM-DD` ISO 8601 |
+| **10** | 321 | **Missing Currency** | `!currency` after `toUpperCase().trim()` | **Error Flagged.** Defaults to group base currency (INR) |
+| **11** | 326 | **Multi-Currency / FX Conversion** | Non-INR currency code detected in `EXCHANGE_RATES` map | **FX Mapping.** `base_amount = amount × exchangeRate`. Both original + base stored |
+| **12** | 340 | **Conflicting Split Definitions** | `split_type === 'equal'` AND `split_details` both present | **Blocked.** `hasConflictingSplit = true` — user must choose one definition |
+| **13** | 347 | **Percentage Splits ≠ 100%** | `!totalPct.eq(100)` after summing all weights | **Dynamic Normalization.** Wᵢ = pᵢ / Σp. User visually confirms adjusted ratios |
+| **14** | 404 | **Batch Duplicate (within CSV)** | O(1) `processedMap` lookup on `date_amount_payer_currency` key | **Confidence Warning.** 100/90/70% tiers. Split members also compared via Set equality |
+| **15** | 429 | **Database Duplicate (already imported)** | `dbMap` pre-scan at parse start + pre-insert `Expense.findOne()` check | **DB Duplicate Warning.** System note logged in expense notes with confidence % + matched ID |
+| **16** | 466 | **Temporal Frontier Violation** | Cross-references expense date vs `joined_at` / `left_at` membership dates | **Pro-Rata Engine.** `POST_EXIT_MEMBER_BILLED` + `MID_MONTH_JOINER` — fractional liability by active days |
 
 ---
 

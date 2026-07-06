@@ -51,23 +51,27 @@ This application was engineered to resolve the exact real-world constraints of a
 - Guest → User conversion: `convertGuestToUser()` links without deleting history
 - Settlements and audit trails roll up guest balances into linked user balance if promoted
 
-### 📊 Anomaly Detection Engine (12 Categories)
+### 📊 Anomaly Detection Engine (16 Categories)
 See `SCOPE.md` for full technical specifications. Summary:
 
-| # | Anomaly | Resolution |
-|---|---|---|
-| 1 | Missing payer | Block row, require user selection |
-| 2 | Comma-formatted numbers (1,500) | Strip non-numeric chars → Big.js |
-| 3 | Floating-point overflow (₹899.995) | Banker's Rounding (Half-Even) |
-| 4 | Name typos / case variants | Levenshtein fuzzy match + "Did you mean?" |
-| 5 | Duplicate transactions | Hash map + DB check + confidence % |
-| 6 | Non-standard dates (DD/MM/YYYY) | Normalize to ISO 8601 YYYY-MM-DD |
-| 7 | Settlement entries in expense list | Flag `is_settlement=true`, route to P2P engine |
-| 8 | Percentage splits not summing to 100% | Auto-normalize ratios |
-| 9 | Missing currency | Inherit group base currency (INR) |
-| 10 | Multi-currency entries (USD, EUR) | FX conversion to INR base amount |
-| 11 | Negative amounts | Treat as refund, invert transaction topology |
-| 12 | Temporal frontier violations | Pro-rata day-basis engine |
+| # | Code Line | Anomaly | Resolution |
+|---|---|---|---|
+| 1 | 192 | **Missing Description** | Block row — error until user fills it |
+| 2 | 194 | **Missing Payer (paid_by)** | Block row — error until user selects payer |
+| 3 | 196 | **Missing Amount** | Block row immediately — no further processing |
+| 4 | 259 | **Name Typo / Fuzzy Match** | Levenshtein ≤ 2 → "Did you mean?" popup (3-way choice) |
+| 5 | 254 | **Unknown Participant** | No exact or fuzzy match → marked as unknown, user resolves |
+| 6 | 267 | **Comma-Formatted Numbers (1,500)** | Strip non-numeric chars → `Big.js` parse |
+| 7 | 278 | **Negative Amount (Refund)** | `is_refund: true` — payer credited, splits debited |
+| 8 | 285 | **Settlement Logged as Expense** | `is_settlement: true` — routed to P2P debt engine |
+| 9 | 294 | **Non-Standard Date Formats** | Multi-format parse → ISO 8601 `YYYY-MM-DD` |
+| 10 | 321 | **Missing Currency** | Error flagged — defaults to group base currency (INR) |
+| 11 | 326 | **Multi-Currency / FX Conversion** | Non-INR → base_amount computed with exchange rate |
+| 12 | 340 | **Conflicting Split Definitions** | Both `split_type=equal` AND `split_details` present → blocked |
+| 13 | 347 | **Percentage Splits ≠ 100%** | Auto-normalize: Wᵢ = pᵢ / Σp |
+| 14 | 404 | **Batch Duplicate (within CSV)** | O(1) hash map + confidence score + split member Set comparison |
+| 15 | 429 | **Database Duplicate (already imported)** | DB pre-scan at parse start + pre-insert `findOne` check |
+| 16 | 466 | **Temporal Frontier Violation** | `POST_EXIT_MEMBER_BILLED` + `MID_MONTH_JOINER` pro-rata engine |
 
 ### ⏱️ Temporal Boundary Engine
 - Dynamically detects `MID_MONTH_JOINER` and `POST_EXIT_MEMBER_BILLED` anomalies
