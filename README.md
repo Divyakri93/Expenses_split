@@ -65,3 +65,6 @@ Navigate to `http://localhost:5173` in your browser.
 3. Click **CSV Import Wizard**.
 4. Upload `expenses_export.csv` to trigger the Anomaly Detection engine.
 5. Interactively resolve the anomalies, view the **CSV Changes Log** tab for the audit trail, and commit the clean data to PostgreSQL.
+
+---
+*Note: This repository is actively maintained and synced with the `Expenses_split` remote repository.*
