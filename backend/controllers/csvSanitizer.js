@@ -80,7 +80,7 @@ const calculateConfidence = (a, b) => {
 
 
 const createRowValidator = (context) => {
-    const { ACTIVE_MEMBERS, dbUserNames, EXCHANGE_RATES, MOCK_MEMBER_DATES, dbMap, processedMap, getPrefixedId, levenshtein } = context;
+    const { ACTIVE_MEMBERS, dbUserNames, EXCHANGE_RATES, MOCK_MEMBER_DATES, dbMap, processedMap, getPrefixedId, levenshtein, userByNameMap, guestByNameMap } = context;
     
     const getCaseInsensitiveMatch = (name, list) => {
                 if (!name) return null;
@@ -232,6 +232,73 @@ const createRowValidator = (context) => {
                     parsedRow.is_settlement = false;
                 }
 
+                // --- NEW SETTLEMENT LOGIC (Rules 1, 5, 6, 8, 9, 10, 11) ---
+                if (parsedRow.is_settlement) {
+                    let rawSplitWith = row.split_with ? row.split_with.split(';') : [];
+                    if (rawSplitWith.length === 0 && row.split_details) {
+                        const parts = row.split_details.split(/[;,]/).filter(Boolean);
+                        parts.forEach(part => {
+                            const match = part.match(/^([^0-9%:]+)/);
+                            if (match) rawSplitWith.push(match[1]);
+                        });
+                    }
+                    rawSplitWith = rawSplitWith.map(s => s.trim()).filter(Boolean);
+
+                    if (rawSplitWith.length !== 1) {
+                        errors.push('One settlement should have exactly one receiver.');
+                    } else {
+                        const rawReceiver = rawSplitWith[0];
+                        const matchedReceiver = checkKnownMember(rawReceiver);
+                        const finalReceiver = matchedReceiver || rawReceiver.trim();
+                        
+                        if (finalReceiver.toLowerCase() === parsedRow.paid_by.toLowerCase()) {
+                            errors.push('A person cannot settle with themselves.');
+                        } else {
+                            parsedRow.settled_to = finalReceiver;
+                            checkAndSuggest(parsedRow.paid_by);
+                            checkAndSuggest(finalReceiver);
+                        }
+                    }
+                    if (amountBig.lte(0)) {
+                        errors.push('Settlement amount must be positive.');
+                    } else if (dbMap && userByNameMap) {
+                        const debtorName = parsedRow.paid_by.trim().toLowerCase();
+                        const creditorName = finalReceiver.toLowerCase();
+                        const debtorUserId = userByNameMap[debtorName];
+                        const debtorGuestId = guestByNameMap ? guestByNameMap[debtorName] : null;
+                        
+                        let debtorNetBalance = Big(0);
+
+                        for (let expensesArray of dbMap.values()) {
+                            for (let exp of expensesArray) {
+                                let paidByDebtor = false;
+                                if (debtorUserId && exp.paid_by_user_id === debtorUserId) paidByDebtor = true;
+                                if (debtorGuestId && exp.paid_by_guest_id === debtorGuestId) paidByDebtor = true;
+
+                                if (paidByDebtor) {
+                                    debtorNetBalance = debtorNetBalance.plus(exp.amount);
+                                }
+
+                                if (exp.ExpenseSplits) {
+                                    for (let split of exp.ExpenseSplits) {
+                                        let splitForDebtor = false;
+                                        if (debtorUserId && split.user_id === debtorUserId) splitForDebtor = true;
+                                        if (debtorGuestId && split.guest_id === debtorGuestId) splitForDebtor = true;
+
+                                        if (splitForDebtor) {
+                                            debtorNetBalance = debtorNetBalance.minus(split.calculated_share_amount);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (debtorNetBalance.lt(0) && amountBig.gt(debtorNetBalance.abs())) {
+                            warnings.push(`Over-settlement warning: Repayment amount (${amountBig.toString()}) exceeds debtor's current outstanding negative net balance (${debtorNetBalance.abs().toString()}) in the database.`);
+                        }
+                    }
+                }
+
                 // 8. Non-Standardized Date Formats
                 let parsedDate = null;
                 const dateStr = row.date;
@@ -278,6 +345,7 @@ const createRowValidator = (context) => {
                 parsedRow.currency = currency;
                 parsedRow.exchange_rate_to_base = exchangeRate;
 
+                if (!parsedRow.is_settlement) {
                 // 12. Conflicting Split Definitions
                 let hasConflictingSplit = false;
                 if (row.split_type === 'equal' && row.split_details) {
@@ -595,6 +663,7 @@ const createRowValidator = (context) => {
                     }
                 }
 
+                } // End if(!parsedRow.is_settlement)
                 parsedRow.anomaly = anomaly;
 
                 return {
@@ -675,7 +744,7 @@ exports.processCSV = async (req, res) => {
             const processedMap = new Map();
 
 
-            const validator = createRowValidator({ ACTIVE_MEMBERS, dbUserNames, EXCHANGE_RATES, MOCK_MEMBER_DATES, dbMap, processedMap, getPrefixedId, levenshtein });
+            const validator = createRowValidator({ ACTIVE_MEMBERS, dbUserNames, EXCHANGE_RATES, MOCK_MEMBER_DATES, dbMap, processedMap, getPrefixedId, levenshtein, userByNameMap, guestByNameMap });
             results.forEach((row, index) => {
                 processedRows.push(validator(row, index));
             });
@@ -725,7 +794,7 @@ exports.commitData = async (req, res) => {
             }
         });
 
-        const validator = createRowValidator({ ACTIVE_MEMBERS, dbUserNames, EXCHANGE_RATES, MOCK_MEMBER_DATES, dbMap, processedMap, getPrefixedId, levenshtein });
+        const validator = createRowValidator({ ACTIVE_MEMBERS, dbUserNames, EXCHANGE_RATES, MOCK_MEMBER_DATES, dbMap, processedMap, getPrefixedId, levenshtein, userByNameMap, guestByNameMap });
 
         for (let i = 0; i < rows.length; i++) {
             const r = rows[i];
@@ -948,7 +1017,18 @@ exports.commitData = async (req, res) => {
                 console.error('commitData duplicate pre-check error:', dupErr);
             }
 
+
+            let settled_to_user_id = null;
+            let settled_to_guest_id = null;
+            if (d.is_settlement && d.settled_to) {
+                const receiverName = d.settled_to.trim().toLowerCase();
+                if (guestMap[receiverName]) settled_to_guest_id = guestMap[receiverName];
+                else settled_to_user_id = userMap[receiverName] || adminId;
+            }
+
             const exp = await Expense.create({
+                settled_to_user_id,
+                settled_to_guest_id,
                 group_id: group.id,
                 description: d.description,
                 paid_by_user_id,
@@ -962,6 +1042,9 @@ exports.commitData = async (req, res) => {
                 is_settlement: d.is_settlement,
                 status: 'active'
             }, { transaction: t });
+
+            // Skip split creation if it's a settlement (Rule 3 & 4)
+            if (d.is_settlement) continue;
 
             // Create Splits
             let splitMembers = d.parsed_split_details

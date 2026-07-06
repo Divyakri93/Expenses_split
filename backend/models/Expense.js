@@ -23,6 +23,14 @@ const Expense = sequelize.define('Expense', {
     type: DataTypes.UUID,
     allowNull: true,
   },
+  settled_to_user_id: {
+    type: DataTypes.UUID,
+    allowNull: true,
+  },
+  settled_to_guest_id: {
+    type: DataTypes.UUID,
+    allowNull: true,
+  },
   amount: {
     type: DataTypes.DECIMAL(12, 4),
     allowNull: false,
