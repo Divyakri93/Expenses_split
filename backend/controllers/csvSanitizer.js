@@ -352,7 +352,8 @@ exports.processCSV = async (req, res) => {
                     let invalidFormat = false;
 
                     parts.forEach(([name, pct]) => {
-                        const nName = normalizeName(name, ACTIVE_MEMBERS);
+                        const matchedName = checkKnownMember(name);
+                        const nName = matchedName || name.trim();
                         if (!pct) {
                             invalidFormat = true;
                             details[nName] = Big(0);
