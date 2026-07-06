@@ -353,10 +353,13 @@ const createRowValidator = (context) => {
                 if (row.split_type === 'equal' && row.split_details) {
                     hasConflictingSplit = true;
                 }
-                parsedRow.split_type = row.split_type || 'equal';
+                let parsedType = row.split_type ? row.split_type.toLowerCase() : 'equal';
+                if (parsedType === 'ratio' || parsedType === 'share_ratio') parsedType = 'share';
+                parsedRow.split_type = parsedType;
+                row.split_type = parsedType;
 
                 // 7 & 12. Percentage and Unequal Breakdown Discrepancies
-                if (row.split_details && (row.split_type === 'percentage' || row.split_type === 'unequal' || hasConflictingSplit)) {
+                if (row.split_details && (row.split_type === 'percentage' || row.split_type === 'unequal' || row.split_type === 'share' || hasConflictingSplit)) {
                     const parts = row.split_details.split(',').map(s => s.split(':'));
                     let totalVal = Big(0);
                     let details = {};
@@ -385,6 +388,10 @@ const createRowValidator = (context) => {
                                 if (p.lte(0) || p.gt(100)) {
                                     invalidPercentageNames.push(nName);
                                 }
+                            } else if (row.split_type === 'share') {
+                                if (p.lte(0)) {
+                                    invalidPercentageNames.push(nName); // Reusing this array to collect invalid ratios
+                                }
                             } else {
                                 if (p.lt(0)) hasNegative = true;
                                 if (p.eq(0)) hasZero = true;
@@ -404,7 +411,11 @@ const createRowValidator = (context) => {
                     });
 
                     if (invalidPercentageNames.length > 0) {
-                        errors.push(`Invalid percentage for ${invalidPercentageNames.join(', ')}: must be greater than 0 and less than or equal to 100.`);
+                        if (row.split_type === 'share') {
+                            errors.push(`Invalid ratio for ${invalidPercentageNames.join(', ')}: must be numeric and greater than 0.`);
+                        } else {
+                            errors.push(`Invalid percentage for ${invalidPercentageNames.join(', ')}: must be greater than 0 and less than or equal to 100.`);
+                        }
                     }
                     if (hasNegative) {
                         errors.push(`Negative amount found in ${row.split_type} split. Not allowed.`);
@@ -448,8 +459,17 @@ const createRowValidator = (context) => {
                         for (let k in details) parsedDet[k] = details[k].toNumber();
                         parsedRow.parsed_split_details = parsedDet;
                         parsedRow.raw_split_details = parsedDet;
+                    } else if (row.split_type === 'share') {
+                        if (totalVal.lte(0)) {
+                            errors.push('Invalid ratio distribution. Total ratio must be greater than zero.');
+                        }
+                        let parsedDet = {};
+                        for (let k in details) parsedDet[k] = details[k].toNumber();
+                        parsedRow.parsed_split_details = parsedDet;
+                        parsedRow.raw_split_details = parsedDet;
+                        parsedRow.total_ratio = totalVal.toNumber();
                     }
-                } else if ((row.split_type === 'percentage' || row.split_type === 'unequal') && !row.split_details) {
+                } else if ((row.split_type === 'percentage' || row.split_type === 'unequal' || row.split_type === 'share') && !row.split_details) {
                     errors.push(`Invalid split_details format for ${row.split_type}. Expected "Name:Value, Name:Value"`);
                     let parsedDet = {};
                     ACTIVE_MEMBERS.forEach(m => parsedDet[m] = 0);
@@ -1117,6 +1137,10 @@ exports.commitData = async (req, res) => {
                     actualShareBig = baseAmountBig.times(d.parsed_split_details[member] || 0).div(100).round(4);
                 } else if (d.parsed_split_details && d.split_type === 'unequal') {
                     actualShareBig = Big(d.parsed_split_details[member] || 0).round(4);
+                } else if (d.parsed_split_details && d.split_type === 'share') {
+                    let totalRatioBig = Big(d.total_ratio || 1); // Fallback to 1 to prevent division by zero if parsing failed somehow
+                    let memberRatio = Big(d.parsed_split_details[member] || 0);
+                    actualShareBig = baseAmountBig.times(memberRatio).div(totalRatioBig).round(4);
                 } else {
                     actualShareBig = baseAmountBig.div(validSplitMembers.length).round(4);
                 }
