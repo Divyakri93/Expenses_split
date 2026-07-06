@@ -217,7 +217,7 @@ const createRowValidator = (context) => {
                 }
 
                 // 10. Negative Amounts / Edge Cases
-                if (amountBig.lt(0)) {
+                if (amountBig.lt(0) && !row._allow_negative && !row._is_refund) {
                     parsedRow.negative_amount_detected = true;
                     parsedRow.original_amount = parsedRow.amount;
                     parsedRow.resolution_type = 'refund';
@@ -228,6 +228,22 @@ const createRowValidator = (context) => {
                         status: 'needs_resolution'
                     };
                 }
+
+                // 10b. Zero Amounts
+                if (amountBig.eq(0) && !row._allow_zero) {
+                    parsedRow.zero_amount_detected = true;
+                    parsedRow.original_amount = parsedRow.amount;
+                    parsedRow.resolution_type = 'zero_amount';
+                    return {
+                        data: parsedRow,
+                        errors: [],
+                        warnings: [...warnings, 'Zero amount detected. This expense has no value. Please confirm how to handle this transaction.'],
+                        status: 'needs_resolution'
+                    };
+                }
+
+                // Inject overriding metadata applied by commitData during re-validation
+                parsedRow.is_refund = row._is_refund || false;
 
                 // 6. Settlements Logged as Expenses
                 const descLower = row.description.toLowerCase();
@@ -844,7 +860,47 @@ exports.processCSV = async (req, res) => {
         });
 };
 exports.commitData = async (req, res) => {
-    const { rows, fileName, resolutions = {}, corrections = {} } = req.body;
+    const { rows, fileName, resolutions = {} } = req.body;
+    let corrections = req.body.corrections || {};
+
+    // Map resolutions into corrections to perfectly trigger validator re-run
+    rows.forEach((r, index) => {
+        const d = r.data || r;
+        const originalIndex = d.original_index !== undefined ? d.original_index : index;
+        
+        if (d.zeroAmountResolution) {
+            const zr = d.zeroAmountResolution;
+            if (zr.action === 'edit_amount' && zr.amount !== undefined) {
+                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), amount: zr.amount };
+            } else if (zr.action === 'keep_zero') {
+                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), _allow_zero: true };
+            } else if (zr.action === 'skip') {
+                r.status = 'rejected';
+            }
+        }
+        
+        if (d.refundResolution) {
+            const rr = d.refundResolution;
+            if (rr.action === 'refund') {
+                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), amount: Math.abs(Number(d.amount)), _is_refund: true };
+            } else if (rr.action === 'keep_negative') {
+                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), _allow_negative: true, _is_refund: false };
+            } else if (rr.action === 'edit_amount' && rr.new_amount !== undefined) {
+                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), amount: Number(rr.new_amount) };
+            } else if (rr.action === 'skip') {
+                r.status = 'rejected';
+            }
+        }
+
+        if (d.dateResolution) {
+            const dr = d.dateResolution;
+            if (dr.action === 'resolve' && dr.date) {
+                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), date: dr.date };
+            } else if (dr.action === 'skip') {
+                r.status = 'rejected';
+            }
+        }
+    });
 
     const hasCorrections = Object.keys(corrections).length > 0;
     
@@ -1062,41 +1118,7 @@ exports.commitData = async (req, res) => {
             if (rowData.status === 'error' || rowData.rejected) continue; // Skip errors and rejected
             const d = rowData.data;
             
-            // Apply Date Resolution if present
-            if (d.dateResolution) {
-                if (d.dateResolution.action === 'skip') {
-                    continue; // Skip creating this expense entirely
-                } else if (d.dateResolution.action === 'resolve' && d.dateResolution.date) {
-                    const parsedDateRes = parse(d.dateResolution.date, 'yyyy-MM-dd', new Date());
-                    if (!isValid(parsedDateRes)) {
-                        throw new Error('Invalid resolved date format from frontend: ' + d.dateResolution.date);
-                    }
-                    d.date = format(parsedDateRes, 'yyyy-MM-dd');
-                }
-            }
 
-            // Apply Refund Resolution if present
-            if (d.refundResolution) {
-                if (d.refundResolution.action === 'skip') {
-                    continue; // Skip creating this expense entirely
-                } else if (d.refundResolution.action === 'refund') {
-                    d.base_amount = Math.abs(d.base_amount);
-                    d.amount = Math.abs(d.amount);
-                    d.is_refund = true;
-                } else if (d.refundResolution.action === 'keep_negative') {
-                    d.is_refund = false;
-                } else if (d.refundResolution.action === 'edit_amount' && d.refundResolution.new_amount !== undefined) {
-                    try {
-                        const newAmountBig = Big(d.refundResolution.new_amount).round(2);
-                        d.amount = newAmountBig.toNumber();
-                        let exchangeRate = d.exchange_rate_to_base || 1.0;
-                        d.base_amount = newAmountBig.times(exchangeRate).round(2).toNumber();
-                        d.is_refund = false;
-                    } catch (e) {
-                        throw new Error('Invalid edited amount for refund resolution: ' + d.refundResolution.new_amount);
-                    }
-                }
-            }
 
             const payerName = d.paid_by.trim().toLowerCase();
 
