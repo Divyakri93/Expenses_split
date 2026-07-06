@@ -361,6 +361,8 @@ const createRowValidator = (context) => {
                     let invalidFormat = false;
                     let hasZero = false;
                     let hasNegative = false;
+                    let hasGreaterThan100 = false;
+                    let invalidPercentageNames = [];
 
                     parts.forEach(([name, val]) => {
                         const matchedName = checkKnownMember(name);
@@ -376,8 +378,15 @@ const createRowValidator = (context) => {
                             else cleanVal = cleanVal.replace(/[^0-9.-]/g, ''); // unequal: strip currency symbols
                             
                             const p = Big(cleanVal);
-                            if (p.lt(0)) hasNegative = true;
-                            if (p.eq(0)) hasZero = true;
+                            
+                            if (row.split_type === 'percentage') {
+                                if (p.lte(0) || p.gt(100)) {
+                                    invalidPercentageNames.push(nName);
+                                }
+                            } else {
+                                if (p.lt(0)) hasNegative = true;
+                                if (p.eq(0)) hasZero = true;
+                            }
 
                             let share = p;
                             if (row.split_type === 'unequal' && exchangeRate !== 1.0) {
@@ -392,6 +401,9 @@ const createRowValidator = (context) => {
                         }
                     });
 
+                    if (invalidPercentageNames.length > 0) {
+                        errors.push(`Invalid percentage for ${invalidPercentageNames.join(', ')}: must be greater than 0 and less than or equal to 100.`);
+                    }
                     if (hasNegative) {
                         errors.push(`Negative amount found in ${row.split_type} split. Not allowed.`);
                     }
@@ -405,7 +417,12 @@ const createRowValidator = (context) => {
                         ACTIVE_MEMBERS.forEach(m => parsedDet[m] = 0);
                         parsedRow.raw_split_details = parsedDet;
                     } else if (row.split_type === 'percentage') {
-                        if (!totalVal.eq(100)) {
+                        if (totalVal.eq(0)) {
+                            errors.push('Total percentage cannot be zero.');
+                            let parsedDet = {};
+                            ACTIVE_MEMBERS.forEach(m => parsedDet[m] = 0);
+                            parsedRow.raw_split_details = parsedDet;
+                        } else if (!totalVal.eq(100)) {
                             warnings.push(`Percentages sum to ${totalVal.toString()}%. Normalized to 100%.`);
                             let normalizedDetails = {};
                             for (let nName in details) {
