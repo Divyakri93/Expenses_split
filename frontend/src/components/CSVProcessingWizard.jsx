@@ -477,6 +477,72 @@ const CSVProcessingWizard = () => {
                   </div>
                 )}
 
+                {/* Did you mean? — Typo Correction Card */}
+                {activeRow.data.typo_suggestions && activeRow.data.typo_suggestions.length > 0 && (
+                  <div className="mb-6 bg-sky-500/10 border border-sky-500/30 rounded-xl p-4 shadow-[0_0_20px_rgba(56,189,248,0.15)]">
+                    <h3 className="text-sm font-bold text-sky-400 flex items-center mb-1 tracking-wide">
+                      <span className="mr-2 text-base">🔍</span> Possible Name Typo Detected
+                    </h3>
+                    <p className="text-xs text-slate-400 mb-4">The following name(s) are very close to a registered member. Choose how to handle each:</p>
+                    <div className="space-y-4">
+                      {activeRow.data.typo_suggestions.map(suggestion => {
+                        const key = suggestion.original.toLowerCase();
+                        const current = resolutions[key] || { action: 'match', matched_name: suggestion.suggested };
+                        return (
+                          <div key={key} className="bg-black/30 rounded-lg border border-white/10 p-3">
+                            <div className="flex items-center gap-2 mb-3">
+                              <span className="text-sm font-bold text-rose-400 line-through opacity-70">{suggestion.original}</span>
+                              <span className="text-slate-500">→</span>
+                              <span className="text-sm font-bold text-emerald-400">{suggestion.suggested}</span>
+                              <span className="ml-auto text-xs text-slate-500 bg-black/30 px-2 py-0.5 rounded-full border border-white/5">
+                                {suggestion.distance === 1 ? '1 letter off' : `${suggestion.distance} letters off`}
+                              </span>
+                            </div>
+                            <div className="space-y-2">
+                              <label className={clsx(
+                                "flex items-center gap-3 p-2.5 rounded-lg cursor-pointer border transition-all",
+                                current.action === 'match' ? "bg-emerald-500/15 border-emerald-500/40 shadow-[0_0_10px_rgba(52,211,153,0.2)]" : "bg-white/5 border-white/5 hover:bg-white/10"
+                              )}>
+                                <input type="radio" name={`typo_${key}`} checked={current.action === 'match'}
+                                  onChange={() => setResolutions({ ...resolutions, [key]: { action: 'match', matched_name: suggestion.suggested } })}
+                                  className="accent-emerald-400" />
+                                <div>
+                                  <div className="text-sm font-semibold text-white">Yes, it's <span className="text-emerald-400">{suggestion.suggested}</span></div>
+                                  <div className="text-xs text-slate-400">Remap to existing member — no duplicate created</div>
+                                </div>
+                              </label>
+                              <label className={clsx(
+                                "flex items-center gap-3 p-2.5 rounded-lg cursor-pointer border transition-all",
+                                current.action === 'guest' ? "bg-purple-500/15 border-purple-500/40 shadow-[0_0_10px_rgba(168,85,247,0.2)]" : "bg-white/5 border-white/5 hover:bg-white/10"
+                              )}>
+                                <input type="radio" name={`typo_${key}`} checked={current.action === 'guest'}
+                                  onChange={() => setResolutions({ ...resolutions, [key]: { action: 'guest' } })}
+                                  className="accent-purple-400" />
+                                <div>
+                                  <div className="text-sm font-semibold text-white">No, keep as Guest <span className="text-purple-400">"{suggestion.original}"</span></div>
+                                  <div className="text-xs text-slate-400">Create a Guest profile with the original spelling</div>
+                                </div>
+                              </label>
+                              <label className={clsx(
+                                "flex items-center gap-3 p-2.5 rounded-lg cursor-pointer border transition-all",
+                                current.action === 'user' ? "bg-sky-500/15 border-sky-500/40 shadow-[0_0_10px_rgba(56,189,248,0.2)]" : "bg-white/5 border-white/5 hover:bg-white/10"
+                              )}>
+                                <input type="radio" name={`typo_${key}`} checked={current.action === 'user'}
+                                  onChange={() => setResolutions({ ...resolutions, [key]: { action: 'user' } })}
+                                  className="accent-sky-400" />
+                                <div>
+                                  <div className="text-sm font-semibold text-white">Create new User <span className="text-sky-400">"{suggestion.original}"</span></div>
+                                  <div className="text-xs text-slate-400">Register as a brand new account</div>
+                                </div>
+                              </label>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {activeRow.errors.length > 0 && (
                   <div className="mb-6 bg-rose-500/10 border border-rose-500/30 rounded-lg p-4 shadow-[0_0_15px_rgba(244,63,94,0.1)]">
                     <h3 className="text-sm font-semibold text-rose-400 flex items-center mb-2"><AlertCircle className="h-4 w-4 mr-2"/> Critical Errors</h3>
