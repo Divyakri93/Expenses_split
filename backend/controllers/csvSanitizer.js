@@ -305,30 +305,65 @@ const createRowValidator = (context) => {
                     }
                 }
 
-                // 8. Non-Standardized Date Formats
-                let parsedDate = null;
-                const dateStr = row.date;
+                // 8. Non-Standardized & Incomplete Date Formats
+                const dateStr = row.date ? String(row.date).trim().replace(/\s+/g, ' ') : '';
                 if (dateStr) {
-                    // Try parsing common formats
-                    let d = new Date(dateStr);
-                    if (!isNaN(d.getTime())) {
-                        parsedRow.date = d.toISOString().split('T')[0];
-                    } else {
-                        // Try DD/MM/YYYY format
-                        const parts = dateStr.split('/');
-                        if (parts.length === 3) {
-                            const dd = parseInt(parts[0], 10);
-                            const mm = parseInt(parts[1], 10) - 1;
-                            const yyyy = parseInt(parts[2], 10);
-                            d = new Date(yyyy, mm, dd);
-                            if (!isNaN(d.getTime()) && yyyy > 1900) {
-                                parsedRow.date = d.toISOString().split('T')[0];
-                            } else {
-                                errors.push(`Unrecognized date format: ${dateStr}`);
+                    // Detect incomplete dates
+                    let missing = [];
+                    if (/^\d{4}$/.test(dateStr)) missing = ['Month', 'Day'];
+                    else if (/^[A-Za-z]+$/.test(dateStr)) missing = ['Year', 'Day'];
+                    else if (/^[A-Za-z]+\s+\d{4}$/.test(dateStr) || /^\d{1,2}-\d{4}$/.test(dateStr) || /^\d{1,2}\/\d{4}$/.test(dateStr)) missing = ['Day'];
+                    else if (/^[A-Za-z]+-\d{1,2}$/.test(dateStr) || /^[A-Za-z]+\s+\d{1,2}$/.test(dateStr) || /^\d{1,2}-[A-Za-z]+$/.test(dateStr) || /^\d{1,2}\s+[A-Za-z]+$/.test(dateStr) || /^\d{1,2}\/\d{1,2}$/.test(dateStr)) missing = ['Year'];
+
+                    if (missing.length > 0) {
+                        parsedRow.needs_resolution = true;
+                        parsedRow.resolution_type = 'date';
+                        parsedRow.date_metadata = {
+                            original: dateStr,
+                            missing_fields: missing,
+                            reason: 'incomplete'
+                        };
+                        return { data: parsedRow, errors: [], warnings: [...warnings, `Incomplete date detected. Missing: ${missing.join(', ')}. Please provide the missing information.`], status: 'needs_resolution' };
+                    }
+
+                    const formats = [
+                        'dd-MM-yyyy', 'MM-dd-yyyy',
+                        'dd/MM/yyyy', 'MM/dd/yyyy',
+                        'yyyy-MM-dd',
+                        'dd MMM yyyy', 'dd MMMM yyyy',
+                        'MMM dd, yyyy', 'MMMM dd, yyyy',
+                        'MMM-dd-yyyy', 'MMMM-dd-yyyy',
+                        'dd-MMM-yyyy', 'dd-MMMM-yyyy',
+                        'd-M-yyyy', 'M-d-yyyy',
+                        'd/M/yyyy', 'M/d/yyyy',
+                        'dd MMM, yyyy', 'dd MMMM, yyyy'
+                    ];
+
+                    let validDates = new Set();
+                    for (let fmt of formats) {
+                        const parsed = parse(dateStr, fmt, new Date());
+                        if (isValid(parsed)) {
+                            // Verify strict matching to prevent rollovers (e.g. 31 Feb -> 3 Mar)
+                            const backFormat = format(parsed, fmt).replace(/\s+/g, ' ');
+                            if (backFormat.toLowerCase() === dateStr.toLowerCase()) {
+                                validDates.add(format(parsed, 'yyyy-MM-dd'));
                             }
-                        } else {
-                            errors.push(`Unrecognized date format: ${dateStr}`);
                         }
+                    }
+
+                    if (validDates.size === 1) {
+                        parsedRow.date = Array.from(validDates)[0];
+                    } else if (validDates.size > 1) {
+                        parsedRow.needs_resolution = true;
+                        parsedRow.resolution_type = 'date';
+                        parsedRow.date_metadata = {
+                            original: dateStr,
+                            valid_interpretations: Array.from(validDates),
+                            reason: 'ambiguous'
+                        };
+                        return { data: parsedRow, errors: [], warnings: [...warnings, 'Ambiguous date detected. Multiple interpretations possible. Please choose the correct date.'], status: 'needs_resolution' };
+                    } else {
+                        errors.push(`Unrecognized or invalid date format: ${dateStr}`);
                     }
                 }
 
@@ -1014,6 +1049,19 @@ exports.commitData = async (req, res) => {
             if (rowData.status === 'error' || rowData.rejected) continue; // Skip errors and rejected
             const d = rowData.data;
             
+            // Apply Date Resolution if present
+            if (d.dateResolution) {
+                if (d.dateResolution.action === 'skip') {
+                    continue; // Skip creating this expense entirely
+                } else if (d.dateResolution.action === 'resolve' && d.dateResolution.date) {
+                    const parsedDateRes = parse(d.dateResolution.date, 'yyyy-MM-dd', new Date());
+                    if (!isValid(parsedDateRes)) {
+                        throw new Error('Invalid resolved date format from frontend: ' + d.dateResolution.date);
+                    }
+                    d.date = format(parsedDateRes, 'yyyy-MM-dd');
+                }
+            }
+
             // Apply Refund Resolution if present
             if (d.refundResolution) {
                 if (d.refundResolution.action === 'skip') {
