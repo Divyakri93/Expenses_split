@@ -697,165 +697,101 @@ const createRowValidator = (context) => {
                     }
                 }
 
-                // 11b. Temporal Border Exclusions
-                let anomaly = null;
+                // 11b. Mid-Month Joiner Detection
                 if (parsedRow.date) {
                     let involved = [];
                     if (parsedRow.parsed_split_details) {
                         involved = Object.keys(parsedRow.parsed_split_details);
                     } else if (normalizedInvolved && normalizedInvolved.length > 0) {
                         involved = [...normalizedInvolved];
-                    } else {
-                        // Default equal split: Only include members who were active during the month of the expense
-                        let expDate = new Date(parsedRow.date);
-                        ACTIVE_MEMBERS.forEach(m => {
-                            const d = MOCK_MEMBER_DATES[m];
-                            if (!d) {
-                                involved.push(m);
-                            } else {
-                                let joinDate = d.joined_at ? new Date(d.joined_at) : null;
-                                let leftDate = d.left_at ? new Date(d.left_at) : null;
-
-                                let isInactiveMonth = false;
-                                if (leftDate && (expDate.getFullYear() > leftDate.getFullYear() || (expDate.getFullYear() === leftDate.getFullYear() && expDate.getMonth() > leftDate.getMonth()))) {
-                                    isInactiveMonth = true;
-                                }
-                                if (joinDate && (expDate.getFullYear() < joinDate.getFullYear() || (expDate.getFullYear() === joinDate.getFullYear() && expDate.getMonth() < joinDate.getMonth()))) {
-                                    isInactiveMonth = true;
-                                }
-
-                                if (!isInactiveMonth) {
-                                    involved.push(m);
-                                }
-                            }
-                        });
                     }
-                    let currentSplits = {};
-                    if (parsedRow.split_type === 'equal') {
-                        involved.forEach(m => currentSplits[m] = Big(100).div(involved.length).toNumber());
-                    } else if (parsedRow.split_type === 'percentage') {
-                        currentSplits = { ...parsedRow.parsed_split_details };
-                    }
+                    
+                    let expDate = new Date(parsedRow.date);
+                    let affected_members = [];
 
-                    let originalSplitRecord = { ...currentSplits };
-                    for (let k in originalSplitRecord) {
-                        originalSplitRecord[k] = Big(originalSplitRecord[k]).round(2).toNumber();
-                    }
-
-                    let correctionNeeded = false;
-                    let originalInvolved = [...involved];
-                    let anomalyMessage = '';
-                    let anomalyMeta = {};
-
-                    involved.forEach(member => {
-                        const dates = MOCK_MEMBER_DATES[member];
-                        if (dates && currentSplits[member] > 0) {
-                            let expenseDate = new Date(parsedRow.date);
-                            let joinDate = dates.joined_at ? new Date(dates.joined_at) : null;
-                            let leftDate = dates.left_at ? new Date(dates.left_at) : null;
-
-                            let activeDays = -1;
-                            let daysInMonth = new Date(expenseDate.getFullYear(), expenseDate.getMonth() + 1, 0).getDate();
-
-                            // Pro-rata logic: If they joined or left IN THE SAME MONTH as the expense,
-                            // calculate their active days for that month.
-                            if (leftDate && expenseDate.getMonth() === leftDate.getMonth() && expenseDate.getFullYear() === leftDate.getFullYear()) {
-                                activeDays = leftDate.getDate();
-                            } else if (joinDate && expenseDate.getMonth() === joinDate.getMonth() && expenseDate.getFullYear() === joinDate.getFullYear()) {
-                                activeDays = (daysInMonth - joinDate.getDate()) + 1;
-                            } else if (leftDate && expenseDate > leftDate) {
-                                if (!row._allow_post_exit_member) {
-                                    activeDays = 0; // Explicitly included but completely inactive
-                                }
-                            } else if (joinDate && expenseDate < joinDate) {
-                                activeDays = 0; // Explicitly included but completely inactive
-                            }
-
-                            if (activeDays >= 0) {
-                                let maxRatio = Big(activeDays).div(daysInMonth);
-                                let oldShare = Big(currentSplits[member]);
-                                let allowedShare = oldShare.times(maxRatio).toNumber();
-
-                                if (oldShare.gt(allowedShare)) {
-                                    correctionNeeded = true;
-                                    currentSplits[member] = allowedShare;
-
-                                    let formattedMonth = expenseDate.toLocaleString('default', { month: 'long', year: 'numeric' });
-                                    if (activeDays === 0) {
-                                        if (leftDate && expenseDate > leftDate) {
-                                            anomalyMeta.anomaly_type = 'POST_EXIT_MEMBER_BILLED';
-                                            let capMember = member.charAt(0).toUpperCase() + member.slice(1);
-                                            anomalyMessage = `${capMember} officially left the flat on ${leftDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}. However, they were included in the '${row.description || 'Unnamed Expense'}' bill dated ${expenseDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}. Note fields confirm: '${row.notes || 'oops meera still in the group list'}'.`;
-                                        } else {
-                                            anomalyMessage = `User ${member} was not active in ${formattedMonth}.`;
-                                        }
-                                    } else {
-                                        if (joinDate && expenseDate.getMonth() === joinDate.getMonth() && expenseDate.getFullYear() === joinDate.getFullYear()) {
-                                            anomalyMeta.anomaly_type = 'MID_MONTH_JOINER';
-                                            let capMember = member.charAt(0).toUpperCase() + member.slice(1);
-                                            anomalyMessage = `Problem: ${capMember} joined the group on ${joinDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} (Active for ${activeDays}/${daysInMonth} days). A full month flat split is being applied.\n\nSystem Calculation: ${capMember}'s share is adjusted to ${activeDays} days pro-rata. The remaining unallocated amount from his early inactive ${daysInMonth - activeDays} days is distributed among the full-time members.`;
-                                        } else {
-                                            anomalyMessage = `User ${member} was only active for ${activeDays} out of ${daysInMonth} days in ${formattedMonth}.`;
-                                        }
-                                    }
-                                    anomalyMeta = { total_month_days: daysInMonth, user_active_days: activeDays, ...anomalyMeta };
-                                }
+                    involved.forEach(m => {
+                        const d = MOCK_MEMBER_DATES[m];
+                        if (d && d.joined_at) {
+                            let joinDate = new Date(d.joined_at);
+                            if (expDate > joinDate && expDate.getMonth() === joinDate.getMonth() && expDate.getFullYear() === joinDate.getFullYear()) {
+                                affected_members.push({
+                                    name: m,
+                                    join_date: d.joined_at
+                                });
                             }
                         }
                     });
 
-                    if (correctionNeeded) {
-                        let total = Object.values(currentSplits).reduce((a, b) => Big(a).plus(b).toNumber(), 0);
-                        if (Big(total).gte(0) && Big(total).lt(100)) {
-                            let diff = Big(100).minus(total).toNumber();
-                            let activeCount = 0;
+                    if (affected_members.length > 0 && !row._allow_mid_month_joiner) {
+                        parsedRow.needs_resolution = true;
+                        parsedRow.resolution_type = 'mid_month_joiner';
+                        parsedRow.affected_member = affected_members[0].name;
+                        parsedRow.join_date = affected_members[0].join_date;
+                        parsedRow.expense_date = parsedRow.date;
+                        return { 
+                            data: parsedRow, 
+                            errors: [], 
+                            warnings: [...warnings, 'One or more participants joined during this billing period. Billing policy cannot be determined automatically.'], 
+                            status: 'needs_resolution' 
+                        };
+                    }
+                }
 
-                            originalInvolved.forEach(m => {
-                                let d = MOCK_MEMBER_DATES[m];
-                                let expDate = new Date(parsedRow.date);
-                                let isActive = true;
-                                if (d) {
-                                    if (d.left_at && expDate > new Date(d.left_at) && (expDate.getMonth() !== new Date(d.left_at).getMonth() || expDate.getFullYear() !== new Date(d.left_at).getFullYear())) isActive = false;
-                                    if (d.joined_at && expDate < new Date(d.joined_at) && (expDate.getMonth() !== new Date(d.joined_at).getMonth() || expDate.getFullYear() !== new Date(d.joined_at).getFullYear())) isActive = false;
-                                }
-                                if (isActive) activeCount++;
-                            });
+                // Apply User-Requested Prorata for Mid-Month Joiners
+                if (row._prorate_mid_month_joiner) {
+                    const start = new Date(row.billingPeriodStart);
+                    const end = new Date(row.billingPeriodEnd);
+                    const totalDays = Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1;
+                    
+                    let currentSplits = {};
+                    if (parsedRow.parsed_split_details) {
+                        currentSplits = { ...parsedRow.parsed_split_details };
+                    } else if (parsedRow.split_type === 'equal') {
+                        let involved = normalizedInvolved && normalizedInvolved.length > 0 ? normalizedInvolved : Object.keys(userByNameMap).concat(Object.keys(guestByNameMap || {}));
+                        let equalShare = Big(100).div(involved.length).round(2).toNumber();
+                        involved.forEach(m => currentSplits[m.toLowerCase()] = equalShare);
+                        parsedRow.split_type = 'percentage';
+                    }
 
-                            if (activeCount > 0) {
-                                originalInvolved.forEach(m => {
-                                    let d = MOCK_MEMBER_DATES[m];
-                                    let expDate = new Date(parsedRow.date);
-                                    let isActive = true;
-                                    if (d) {
-                                        if (d.left_at && expDate > new Date(d.left_at) && (expDate.getMonth() !== new Date(d.left_at).getMonth() || expDate.getFullYear() !== new Date(d.left_at).getFullYear())) isActive = false;
-                                        if (d.joined_at && expDate < new Date(d.joined_at) && (expDate.getMonth() !== new Date(d.joined_at).getMonth() || expDate.getFullYear() !== new Date(d.joined_at).getFullYear())) isActive = false;
-                                    }
-                                    if (isActive) currentSplits[m] = Big(currentSplits[m]).plus(Big(diff).div(activeCount)).toNumber();
-                                });
+                    let diff = Big(0);
+                    let nonJoiners = [];
+                    
+                    for (let m in currentSplits) {
+                        const d = MOCK_MEMBER_DATES[m];
+                        let isJoiner = false;
+                        if (d && d.joined_at) {
+                            let join = new Date(d.joined_at);
+                            if (join > start && join <= end) {
+                                isJoiner = true;
+                                let activeDays = Math.round((end - join) / (1000 * 60 * 60 * 24)) + 1;
+                                if (activeDays < 0) activeDays = 0;
+                                let ratio = Big(activeDays).div(totalDays);
+                                
+                                let oldVal = Big(currentSplits[m]);
+                                let newVal = oldVal.times(ratio).round(2);
+                                diff = diff.plus(oldVal.minus(newVal));
+                                currentSplits[m] = newVal.toNumber();
                             }
-
-                            let finalTotal = Big(0);
-                            let keys = Object.keys(currentSplits);
-                            for (let i = 0; i < keys.length; i++) {
-                                let k = keys[i];
-                                if (i === keys.length - 1) {
-                                    currentSplits[k] = Big(100).minus(finalTotal).round(2).toNumber();
-                                } else {
-                                    currentSplits[k] = Big(currentSplits[k]).round(2).toNumber();
-                                    finalTotal = finalTotal.plus(currentSplits[k]);
-                                }
+                        }
+                        if (!isJoiner) nonJoiners.push(m);
+                    }
+                    
+                    if (diff.gt(0) && nonJoiners.length > 0) {
+                        let splitDiff = diff.div(nonJoiners.length).round(2);
+                        let sumDistributed = Big(0);
+                        
+                        for (let i = 0; i < nonJoiners.length; i++) {
+                            let m = nonJoiners[i];
+                            if (i === nonJoiners.length - 1) {
+                                let remainder = diff.minus(sumDistributed);
+                                currentSplits[m] = Big(currentSplits[m]).plus(remainder).round(2).toNumber();
+                            } else {
+                                currentSplits[m] = Big(currentSplits[m]).plus(splitDiff).round(2).toNumber();
+                                sumDistributed = sumDistributed.plus(splitDiff);
                             }
-
-                            anomaly = {
-                                status: "anomaly_detected",
-                                type: anomalyMeta.anomaly_type || "TEMPORAL_BORDER_EXCLUSION",
-                                message: anomalyMessage,
-                                original_split: originalSplitRecord,
-                                suggested_split: currentSplits,
-                                metadata: anomalyMeta
-                            };
                         }
                     }
+                    parsedRow.parsed_split_details = currentSplits;
                 }
 
                 } // End if(!parsedRow.is_settlement)
@@ -1003,6 +939,41 @@ exports.commitData = async (req, res) => {
                 if (tr.split_type !== undefined) corrections[originalIndex].split_type = tr.split_type;
                 if (tr.amount !== undefined) corrections[originalIndex].amount = tr.amount;
             } else if (tr.action === 'skip') {
+                r.status = 'rejected';
+            }
+        }
+
+        if (d.midMonthJoinerResolution) {
+            const mj = d.midMonthJoinerResolution;
+            if (mj.action === 'full_share') {
+                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), _allow_mid_month_joiner: true };
+            } else if (mj.action === 'prorated') {
+                corrections[originalIndex] = { 
+                    ...(corrections[originalIndex] || {}), 
+                    _allow_mid_month_joiner: true, 
+                    _prorate_mid_month_joiner: true,
+                    billingPeriodStart: mj.billingPeriodStart,
+                    billingPeriodEnd: mj.billingPeriodEnd
+                };
+            } else if (mj.action === 'exclude_member' && mj.member) {
+                const memberToRemove = mj.member.toLowerCase();
+                const currentSplitWith = (corrections[originalIndex] && corrections[originalIndex].split_with !== undefined) ? corrections[originalIndex].split_with : (d._raw_csv_row ? d._raw_csv_row.split_with : d.split_with) || '';
+                const currentSplitDetails = (corrections[originalIndex] && corrections[originalIndex].split_details !== undefined) ? corrections[originalIndex].split_details : (d._raw_csv_row ? d._raw_csv_row.split_details : d.split_details) || '';
+
+                if (currentSplitDetails) {
+                    const parts = currentSplitDetails.split(/[;,]/).filter(Boolean);
+                    const newParts = parts.filter(p => !p.trim().toLowerCase().startsWith(memberToRemove));
+                    corrections[originalIndex] = { ...(corrections[originalIndex] || {}), split_details: newParts.join(';') };
+                } else if (currentSplitWith) {
+                    const parts = currentSplitWith.split(/[;,]/).filter(Boolean);
+                    const newParts = parts.filter(p => p.trim().toLowerCase() !== memberToRemove);
+                    corrections[originalIndex] = { ...(corrections[originalIndex] || {}), split_with: newParts.join(';') };
+                }
+            } else if (mj.action === 'edit_split') {
+                corrections[originalIndex] = { ...(corrections[originalIndex] || {}) };
+                if (mj.split_with !== undefined) corrections[originalIndex].split_with = mj.split_with;
+                if (mj.split_details !== undefined) corrections[originalIndex].split_details = mj.split_details;
+            } else if (mj.action === 'skip') {
                 r.status = 'rejected';
             }
         }
