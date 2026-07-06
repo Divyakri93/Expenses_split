@@ -369,7 +369,19 @@ const createRowValidator = (context) => {
 
                 let currency = (row.currency || '').toUpperCase().trim();
                 if (!currency) {
-                    errors.push('Missing currency');
+                    parsedRow.needs_resolution = true;
+                    parsedRow.resolution_type = 'currency';
+                    parsedRow.currency_metadata = {
+                        original_currency: "",
+                        missing_currency: true,
+                        supported_currencies: Object.keys(EXCHANGE_RATES)
+                    };
+                    return { 
+                        data: parsedRow, 
+                        errors: [], 
+                        warnings: [...warnings, 'Currency is missing. Please select the currency.'], 
+                        status: 'needs_resolution' 
+                    };
                 }
                 let exchangeRate = 1.0;
                 if (currency !== 'INR' && currency) {
@@ -851,6 +863,7 @@ exports.commitData = async (req, res) => {
         
         const userByNameMap = {};
         dbUsers.forEach(u => { userByNameMap[u.name.trim().toLowerCase()] = u.id; });
+        const guestByNameMap = {}; // Define safely to prevent crash in validator instantiation
         const getPrefixedId = (name) => {
             const lc = (name || '').trim().toLowerCase();
             if (userByNameMap[lc]) return `user_${userByNameMap[lc]}`;
