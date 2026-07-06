@@ -76,6 +76,10 @@ const Expense = sequelize.define('Expense', {
     type: DataTypes.BOOLEAN,
     defaultValue: false,
   },
+  is_refund: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+  },
   status: {
     type: DataTypes.ENUM('active', 'pending_approval', 'rejected'),
     defaultValue: 'active',

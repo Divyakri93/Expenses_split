@@ -218,9 +218,15 @@ const createRowValidator = (context) => {
 
                 // 10. Negative Amounts / Edge Cases
                 if (amountBig.lt(0)) {
-                    warnings.push('Negative amount detected. Processed as a refund (roles reversed).');
-                    parsedRow.amount = Math.abs(parsedRow.amount);
-                    parsedRow.is_refund = true; // Business logic: the UI will swap payer/split participants visually
+                    parsedRow.negative_amount_detected = true;
+                    parsedRow.original_amount = parsedRow.amount;
+                    parsedRow.resolution_type = 'refund';
+                    return {
+                        data: parsedRow,
+                        errors: [],
+                        warnings: [...warnings, 'Negative amount detected. This may represent a refund or reversal. No automatic changes have been made. Please choose how to handle this transaction.'],
+                        status: 'needs_resolution'
+                    };
                 }
 
                 // 6. Settlements Logged as Expenses
@@ -1007,6 +1013,29 @@ exports.commitData = async (req, res) => {
         for (let rowData of rows) {
             if (rowData.status === 'error' || rowData.rejected) continue; // Skip errors and rejected
             const d = rowData.data;
+            
+            // Apply Refund Resolution if present
+            if (d.refundResolution) {
+                if (d.refundResolution.action === 'skip') {
+                    continue; // Skip creating this expense entirely
+                } else if (d.refundResolution.action === 'refund') {
+                    d.base_amount = Math.abs(d.base_amount);
+                    d.amount = Math.abs(d.amount);
+                    d.is_refund = true;
+                } else if (d.refundResolution.action === 'keep_negative') {
+                    d.is_refund = false;
+                } else if (d.refundResolution.action === 'edit_amount' && d.refundResolution.new_amount !== undefined) {
+                    try {
+                        const newAmountBig = Big(d.refundResolution.new_amount).round(2);
+                        d.amount = newAmountBig.toNumber();
+                        let exchangeRate = d.exchange_rate_to_base || 1.0;
+                        d.base_amount = newAmountBig.times(exchangeRate).round(2).toNumber();
+                        d.is_refund = false;
+                    } catch (e) {
+                        throw new Error('Invalid edited amount for refund resolution: ' + d.refundResolution.new_amount);
+                    }
+                }
+            }
 
             const payerName = d.paid_by.trim().toLowerCase();
 
@@ -1083,6 +1112,7 @@ exports.commitData = async (req, res) => {
                 date: d.date || new Date().toISOString().split('T')[0],
                 notes: finalNotes.trim(),
                 is_settlement: d.is_settlement,
+                is_refund: d.is_refund || false,
                 status: 'active'
             }, { transaction: t });
 
