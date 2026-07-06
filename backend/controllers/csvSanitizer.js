@@ -268,7 +268,7 @@ exports.processCSV = async (req, res) => {
                 let cleanAmountStr = row.amount.replace(/[^0-9.-]/g, '');
                 let amountBig;
                 try {
-                    amountBig = Big(cleanAmountStr).round(2, Big.roundHalfUp);
+                    amountBig = Big(cleanAmountStr).round(2);
                     parsedRow.amount = amountBig.toNumber();
                 } catch (e) {
                     errors.push('Invalid amount format');
@@ -326,7 +326,7 @@ exports.processCSV = async (req, res) => {
                 if (currency !== 'INR') {
                     if (EXCHANGE_RATES[currency]) {
                         exchangeRate = EXCHANGE_RATES[currency];
-                        parsedRow.base_amount = Big(parsedRow.amount).times(exchangeRate).round(2, Big.roundHalfUp).toNumber();
+                        parsedRow.base_amount = Big(parsedRow.amount).times(exchangeRate).round(2).toNumber();
                         warnings.push(`Foreign currency ${currency} converted to INR at rate ${exchangeRate}. Displaying as INR.`);
                     } else {
                         parsedRow.base_amount = parsedRow.amount;
@@ -378,7 +378,7 @@ exports.processCSV = async (req, res) => {
                         warnings.push(`Percentages sum to ${totalPct.toString()}%. Normalized to 100%.`);
                         let normalizedDetails = {};
                         for (let nName in details) {
-                            normalizedDetails[nName] = details[nName].div(totalPct).times(100).round(2, Big.roundHalfUp).toNumber();
+                            normalizedDetails[nName] = details[nName].div(totalPct).times(100).round(2).toNumber();
                         }
                         parsedRow.parsed_split_details = normalizedDetails;
                         let parsedDet = {};

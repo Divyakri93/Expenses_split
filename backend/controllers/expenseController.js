@@ -19,7 +19,7 @@ exports.addManualExpense = async (req, res) => {
         
         if (ccy === 'USD') {
             exchangeRate = EXCHANGE_RATE_USD_INR;
-            baseAmount = Big(amount).times(exchangeRate).round(2, Big.roundHalfUp).toNumber();
+            baseAmount = Big(amount).times(exchangeRate).round(2).toNumber();
         }
 
         // 2. Create Expense
@@ -43,7 +43,7 @@ exports.addManualExpense = async (req, res) => {
 
         // Logic based on split_type
         if (split_type === 'equal') {
-            const splitValue = Big(baseAmount).div(members.length).round(2, Big.roundHalfUp).toNumber();
+            const splitValue = Big(baseAmount).div(members.length).round(2).toNumber();
             for (let userId of members) {
                 await ExpenseSplit.create({
                     expense_id: exp.id,
@@ -55,7 +55,7 @@ exports.addManualExpense = async (req, res) => {
             // split_details is an object: { userId: percentage }
             for (let userId of members) {
                 const pct = split_details[userId] || 0;
-                const share = Big(baseAmount).times(pct).div(100).round(2, Big.roundHalfUp).toNumber();
+                const share = Big(baseAmount).times(pct).div(100).round(2).toNumber();
                 await ExpenseSplit.create({
                     expense_id: exp.id,
                     user_id: userId,
