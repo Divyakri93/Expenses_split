@@ -31,6 +31,10 @@ const Expense = sequelize.define('Expense', {
     type: DataTypes.UUID,
     allowNull: true,
   },
+  original_amount: {
+    type: DataTypes.DECIMAL(12, 4),
+    allowNull: true,
+  },
   amount: {
     type: DataTypes.DECIMAL(12, 4),
     allowNull: false,
@@ -39,10 +43,22 @@ const Expense = sequelize.define('Expense', {
     type: DataTypes.STRING(3),
     allowNull: false,
   },
+  base_currency: {
+    type: DataTypes.STRING(3),
+    defaultValue: 'INR',
+  },
   exchange_rate_to_base: {
     type: DataTypes.DECIMAL(12, 6),
     allowNull: false,
     defaultValue: 1.0,
+  },
+  conversion_timestamp: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
+  exchange_rate_source: {
+    type: DataTypes.STRING,
+    allowNull: true,
   },
   split_type: {
     type: DataTypes.ENUM('equal', 'unequal', 'percentage', 'share'),

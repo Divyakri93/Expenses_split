@@ -331,12 +331,14 @@ const createRowValidator = (context) => {
                     errors.push('Missing currency');
                 }
                 let exchangeRate = 1.0;
-                if (currency !== 'INR') {
+                if (currency !== 'INR' && currency) {
                     if (EXCHANGE_RATES[currency]) {
                         exchangeRate = EXCHANGE_RATES[currency];
                         parsedRow.base_amount = Big(parsedRow.amount).times(exchangeRate).round(2).toNumber();
-                        warnings.push(`Foreign currency ${currency} converted to INR at rate ${exchangeRate}. Displaying as INR.`);
+                        warnings.push(`Converted ${parsedRow.amount} ${currency} to ${parsedRow.base_amount} INR using exchange rate ${exchangeRate}.`);
                     } else {
+                        errors.push(`Unsupported currency: ${currency}`);
+                        // Give base_amount a dummy value to prevent NaN downstream, it will error out anyway
                         parsedRow.base_amount = parsedRow.amount;
                     }
                 } else {
@@ -1050,9 +1052,13 @@ exports.commitData = async (req, res) => {
                 description: d.description,
                 paid_by_user_id,
                 paid_by_guest_id,
+                original_amount: d.amount,
                 amount: d.base_amount,
                 currency: d.currency || 'INR',
+                base_currency: 'INR',
                 exchange_rate_to_base: d.exchange_rate_to_base || 1.0,
+                conversion_timestamp: new Date(),
+                exchange_rate_source: 'system_default',
                 split_type: d.split_type,
                 date: d.date || new Date().toISOString().split('T')[0],
                 notes: finalNotes.trim(),
