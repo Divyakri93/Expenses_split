@@ -2,6 +2,7 @@ import React, { useState, useContext, useEffect } from 'react';
 import { AuthContext } from '../context/AuthContext';
 import { Link, useNavigate } from 'react-router-dom';
 import { Wallet } from 'lucide-react';
+import axios from 'axios';
 
 const Signup = () => {
   const { signup, user } = useContext(AuthContext);
@@ -10,6 +11,10 @@ const Signup = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  
+  const [guests, setGuests] = useState([]);
+  const [selectedGuestId, setSelectedGuestId] = useState('');
+  const [isClaiming, setIsClaiming] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -17,10 +22,18 @@ const Signup = () => {
     }
   }, [user, navigate]);
 
+  useEffect(() => {
+    axios.get('/api/auth/guests')
+      .then(res => {
+        setGuests(res.data.guests || []);
+      })
+      .catch(err => console.error(err));
+  }, []);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      await signup(name, email, password);
+      await signup(name, email, password, isClaiming ? selectedGuestId : null);
       navigate('/');
     } catch (err) {
       setError(err.response?.data?.error || err.message || 'Signup failed');
@@ -37,9 +50,48 @@ const Signup = () => {
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
           {error && <div className="text-rose-500 text-sm text-center font-medium bg-rose-50 py-2 rounded-lg">{error}</div>}
           <div className="rounded-md shadow-sm space-y-4">
+             {guests.length > 0 && (
+                <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-3">
+                   <label className="flex items-center space-x-2 cursor-pointer">
+                      <input 
+                         type="checkbox" 
+                         checked={isClaiming} 
+                         onChange={e => {
+                            setIsClaiming(e.target.checked);
+                            if (e.target.checked && guests.length > 0) {
+                               setSelectedGuestId(guests[0].id);
+                               setName(guests[0].name);
+                            }
+                         }} 
+                         className="rounded text-indigo-600 focus:ring-indigo-500" 
+                      />
+                      <span className="text-sm font-semibold text-slate-700">Claim existing guest profile</span>
+                   </label>
+                   
+                   {isClaiming && (
+                      <div>
+                         <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1 text-slate-400">Select Guest Name</label>
+                         <select 
+                            value={selectedGuestId} 
+                            onChange={e => {
+                               setSelectedGuestId(e.target.value);
+                               const g = guests.find(x => x.id === e.target.value);
+                               if (g) setName(g.name);
+                            }}
+                            className="w-full text-sm font-semibold text-slate-800 border border-slate-300 bg-white p-2.5 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                         >
+                            {guests.map(g => (
+                               <option key={g.id} value={g.id}>{g.name}</option>
+                            ))}
+                         </select>
+                      </div>
+                   )}
+                </div>
+             )}
+             
              <div>
               <label className="sr-only">Full Name</label>
-              <input type="text" required className="appearance-none rounded-lg relative block w-full px-3 py-3 border border-slate-300 placeholder-slate-500 text-slate-900 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="Full Name" value={name} onChange={e => setName(e.target.value)} />
+              <input type="text" required className="appearance-none rounded-lg relative block w-full px-3 py-3 border border-slate-300 placeholder-slate-500 text-slate-900 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="Full Name" value={name} onChange={e => setName(e.target.value)} disabled={isClaiming} />
             </div>
             <div>
               <label className="sr-only">Email address</label>

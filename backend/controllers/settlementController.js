@@ -1,4 +1,4 @@
-const { User, Expense, ExpenseSplit } = require('../models');
+const { User, Expense, ExpenseSplit, Guest } = require('../models');
 const Big = require('big.js');
 Big.RM = 2; // Banker's Rounding (Half-Even)
 
@@ -12,36 +12,26 @@ exports.calculateSettlements = async (req, res) => {
             include: [{ model: ExpenseSplit }]
         });
 
-        const balances = {}; // { userId: netBalance (Big.js) }
+        const balances = {}; // { prefixedId: netBalance (Big.js) }
 
         expenses.forEach(exp => {
-            const payerId = exp.paid_by_user_id;
+            const payerId = exp.paid_by_user_id ? `user_${exp.paid_by_user_id}` : `guest_${exp.paid_by_guest_id}`;
             
             if (!balances[payerId]) balances[payerId] = Big(0);
 
-            // Add the total amount to payer's credit (if not a settlement)
-            // If it's a settlement, the payer is paying back a debt, so they get credited
-            if (exp.is_settlement) {
-               balances[payerId] = balances[payerId].plus(exp.amount);
-            } else {
-               balances[payerId] = balances[payerId].plus(exp.amount);
-            }
+            balances[payerId] = balances[payerId].plus(exp.amount);
 
             let totalSplitAmount = Big(0);
 
             // Deduct from participants
             exp.ExpenseSplits.forEach(split => {
-                const pId = split.user_id;
+                const pId = split.user_id ? `user_${split.user_id}` : `guest_${split.guest_id}`;
                 if (!balances[pId]) balances[pId] = Big(0);
                 
                 const share = Big(split.calculated_share_amount);
                 totalSplitAmount = totalSplitAmount.plus(share);
 
-                if (exp.is_settlement) {
-                    balances[pId] = balances[pId].minus(share);
-                } else {
-                    balances[pId] = balances[pId].minus(share);
-                }
+                balances[pId] = balances[pId].minus(share);
             });
 
             // Handle mathematically unallocated debt (due to missing splits or rounding errors)
@@ -55,12 +45,12 @@ exports.calculateSettlements = async (req, res) => {
         const debtors = [];
         const creditors = [];
 
-        Object.keys(balances).forEach(userId => {
-            const val = balances[userId];
+        Object.keys(balances).forEach(id => {
+            const val = balances[id];
             if (val.lt(0)) {
-                debtors.push({ userId, amount: val.abs() });
+                debtors.push({ id, amount: val.abs() });
             } else if (val.gt(0)) {
-                creditors.push({ userId, amount: val });
+                creditors.push({ id, amount: val });
             }
         });
 
@@ -80,8 +70,8 @@ exports.calculateSettlements = async (req, res) => {
             const minAmount = debtor.amount.lt(creditor.amount) ? debtor.amount : creditor.amount;
 
             settlements.push({
-                from: debtor.userId,
-                to: creditor.userId,
+                from: debtor.id,
+                to: creditor.id,
                 amount: minAmount.round(4).toNumber()
             });
 
@@ -92,14 +82,16 @@ exports.calculateSettlements = async (req, res) => {
             if (creditor.amount.eq(0)) c++;
         }
 
-        // Map User IDs to Names for UI
+        // Map User and Guest IDs to Names for UI
         const users = await User.findAll();
-        const userMap = {};
-        users.forEach(u => userMap[u.id] = u.name);
+        const guests = await Guest.findAll({ where: { group_id: groupId } });
+        const nameMap = {};
+        users.forEach(u => nameMap[`user_${u.id}`] = u.name);
+        guests.forEach(g => nameMap[`guest_${g.id}`] = g.name);
 
         const namedSettlements = settlements.map(s => ({
-            fromName: userMap[s.from] || 'Unknown',
-            toName: userMap[s.to] || 'Unknown',
+            fromName: nameMap[s.from] || 'Unknown',
+            toName: nameMap[s.to] || 'Unknown',
             amount: s.amount
         }));
 

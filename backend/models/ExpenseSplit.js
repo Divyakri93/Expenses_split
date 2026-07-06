@@ -13,7 +13,11 @@ const ExpenseSplit = sequelize.define('ExpenseSplit', {
   },
   user_id: {
     type: DataTypes.UUID,
-    allowNull: false,
+    allowNull: true,
+  },
+  guest_id: {
+    type: DataTypes.UUID,
+    allowNull: true,
   },
   calculated_share_amount: {
     type: DataTypes.DECIMAL(12, 4),
@@ -30,6 +34,10 @@ const ExpenseSplit = sequelize.define('ExpenseSplit', {
     {
       name: 'idx_splits_expense_user',
       fields: ['expense_id', 'user_id']
+    },
+    {
+      name: 'idx_splits_expense_guest',
+      fields: ['expense_id', 'guest_id']
     }
   ]
 });

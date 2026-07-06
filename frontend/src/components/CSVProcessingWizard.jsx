@@ -29,6 +29,7 @@ const CSVProcessingWizard = () => {
   const [activeRowIndex, setActiveRowIndex] = useState(0);
   const [editingPaidBy, setEditingPaidBy] = useState({});
   const [editingCurrency, setEditingCurrency] = useState({});
+  const [resolutions, setResolutions] = useState({});
 
   const handleDownloadCleanCSV = () => {
       // Very simple CSV generator for the clean rows
@@ -220,7 +221,8 @@ const CSVProcessingWizard = () => {
       const validRows = processedRows.filter(r => r.status !== 'error' && !r.rejected);
       const res = await axios.post('/api/expenses/commit', {
         fileName: file ? file.name : 'Unknown File',
-        rows: validRows
+        rows: validRows,
+        resolutions
       });
       alert('Successfully committed data!');
       setProcessedRows([]);
@@ -424,6 +426,53 @@ const CSVProcessingWizard = () => {
                              </div>
                          </div>
                       ))}
+                    </div>
+                  </div>
+                )}
+
+                {activeRow.data.unknown_members && activeRow.data.unknown_members.length > 0 && (
+                  <div className="mb-6 bg-purple-500/10 border border-purple-500/30 rounded-lg p-4 shadow-[0_0_15px_rgba(168,85,247,0.15)]">
+                    <h3 className="text-sm font-semibold text-purple-400 flex items-center mb-2">
+                       <AlertCircle className="h-4 w-4 mr-2"/> Unknown Participants Found
+                    </h3>
+                    <p className="text-xs text-slate-300 mb-3">
+                       We detected participant(s) not matching the permanent flatmates. Choose how to handle them:
+                    </p>
+                    <div className="space-y-3">
+                       {activeRow.data.unknown_members.map(name => {
+                          const resVal = resolutions[name.toLowerCase()] || { action: 'guest' };
+                          return (
+                             <div key={name} className="flex items-center justify-between bg-black/20 p-2.5 rounded-lg border border-white/5">
+                                <span className="text-sm font-semibold text-white capitalize">{name}</span>
+                                <div className="flex gap-2">
+                                   <button 
+                                      type="button" 
+                                      onClick={() => setResolutions({ ...resolutions, [name.toLowerCase()]: { action: 'guest' } })}
+                                      className={clsx(
+                                         "px-3 py-1.5 text-xs font-bold rounded-md transition-all",
+                                         resVal.action === 'guest'
+                                            ? "bg-purple-600 text-white shadow-[0_0_10px_rgba(168,85,247,0.4)]"
+                                            : "bg-white/5 text-slate-300 hover:bg-white/10"
+                                      )}
+                                   >
+                                      Add as Guest
+                                   </button>
+                                   <button 
+                                      type="button"
+                                      onClick={() => setResolutions({ ...resolutions, [name.toLowerCase()]: { action: 'user' } })}
+                                      className={clsx(
+                                         "px-3 py-1.5 text-xs font-bold rounded-md transition-all",
+                                         resVal.action === 'user'
+                                            ? "bg-sky-600 text-white shadow-[0_0_10px_rgba(56,189,248,0.4)]"
+                                            : "bg-white/5 text-slate-300 hover:bg-white/10"
+                                      )}
+                                   >
+                                      Map to User
+                                   </button>
+                                </div>
+                             </div>
+                          );
+                       })}
                     </div>
                   </div>
                 )}

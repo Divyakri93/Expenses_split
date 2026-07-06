@@ -3,7 +3,7 @@ const { Readable } = require('stream');
 const Big = require('big.js');
 Big.RM = 2; // Banker's Rounding (Half-Even)
 const { parse, isValid, parseISO } = require('date-fns');
-const { sequelize, Expense, ExpenseSplit, User, GroupMember } = require('../models');
+const { sequelize, Expense, ExpenseSplit, User, GroupMember, Guest } = require('../models');
 
 // Mock data to simulate DB state during parse for speed, in production this is fetched per group.
 const EXCHANGE_RATES = {
@@ -86,6 +86,38 @@ exports.processCSV = async (req, res) => {
 
         // 4. Name Variants/Typos
         parsedRow.paid_by = normalizeName(row.paid_by, ACTIVE_MEMBERS);
+
+        // Parse and normalize split_with names
+        let splitWithNames = [];
+        if (row.split_with) {
+            splitWithNames = row.split_with.split(';').map(s => s.trim()).filter(Boolean);
+        } else if (row.split_details) {
+            const parts = row.split_details.split(/[;,]/).map(s => s.trim()).filter(Boolean);
+            parts.forEach(part => {
+                const match = part.match(/^([^0-9%:]+)/);
+                if (match) {
+                    splitWithNames.push(match[1].trim());
+                }
+            });
+        }
+        const normalizedInvolved = splitWithNames.map(name => normalizeName(name, ACTIVE_MEMBERS));
+
+        // Detect unknown members (not in ACTIVE_MEMBERS)
+        let unknownMembers = [];
+        if (parsedRow.paid_by && !ACTIVE_MEMBERS.includes(parsedRow.paid_by)) {
+            unknownMembers.push(parsedRow.paid_by);
+        }
+        normalizedInvolved.forEach(name => {
+            if (name && !ACTIVE_MEMBERS.includes(name)) {
+                unknownMembers.push(name);
+            }
+        });
+        unknownMembers = [...new Set(unknownMembers)];
+
+        if (unknownMembers.length > 0) {
+            parsedRow.unknown_members = unknownMembers;
+            warnings.push(`Unknown participant(s) found: ${unknownMembers.join(', ')}`);
+        }
 
         // 2. Comma Formatting in Numbers & 3. Precision Imbalances
         let cleanAmountStr = row.amount.replace(/[^0-9.-]/g, '');
@@ -239,6 +271,8 @@ exports.processCSV = async (req, res) => {
             let involved = [];
             if (parsedRow.parsed_split_details) {
                 involved = Object.keys(parsedRow.parsed_split_details);
+            } else if (normalizedInvolved && normalizedInvolved.length > 0) {
+                involved = [...normalizedInvolved];
             } else {
                 // Default equal split: Only include members who were active during the month of the expense
                 let expDate = new Date(parsedRow.date);
@@ -403,15 +437,20 @@ exports.processCSV = async (req, res) => {
       res.json({ rows: processedRows });
     });
 };
-
 exports.commitData = async (req, res) => {
-    // In a real scenario, this would map the final user-approved rows to the Database
-    // Uses transactions to rollback if any insertion fails.
-    const { rows, fileName } = req.body;
+    const { rows, fileName, resolutions = {} } = req.body;
     
     const t = await sequelize.transaction();
     try {
-        // 1. Extract Unique Names
+        // 1. Create Group
+        const groupName = `Imported CSV: ${fileName || 'Data'}`;
+        const { Group } = require('../models');
+        const group = await Group.create({
+            name: groupName,
+            base_currency: 'INR'
+        }, { transaction: t });
+
+        // 2. Extract Unique Names
         const uniqueNames = new Set();
         rows.forEach(rowData => {
             if(rowData.status === 'error') return;
@@ -423,33 +462,46 @@ exports.commitData = async (req, res) => {
         });
         if (uniqueNames.size === 0) ACTIVE_MEMBERS.forEach(m => uniqueNames.add(m));
 
-        // 2. Auto-Provision Users
+        // 3. Separate Users vs. Guests
         const userMap = {}; // name -> userId
+        const guestMap = {}; // name -> guestId
+        
         for (let name of Array.from(uniqueNames)) {
             if(!name) continue;
-            let user = await User.findOne({ where: sequelize.where(sequelize.fn('LOWER', sequelize.col('name')), name), transaction: t });
-            if (!user) {
+            
+            // Check if name is resolved as guest
+            const matchedKey = Object.keys(resolutions).find(k => k.trim().toLowerCase() === name);
+            const resolution = matchedKey ? resolutions[matchedKey] : null;
+            const isGuest = resolution && (resolution.action === 'guest' || resolution === 'guest');
+
+            if (isGuest) {
                 const capName = name.charAt(0).toUpperCase() + name.slice(1);
-                user = await User.create({
+                const guest = await Guest.create({
                     name: capName,
-                    email: `${name.replace(/\s+/g,'_')}@auto.fairshare.com`,
-                    password_hash: null
+                    group_id: group.id
                 }, { transaction: t });
+                guestMap[name] = guest.id;
+            } else {
+                let user = await User.findOne({ where: sequelize.where(sequelize.fn('LOWER', sequelize.col('name')), name), transaction: t });
+                if (!user) {
+                    const capName = name.charAt(0).toUpperCase() + name.slice(1);
+                    user = await User.create({
+                        name: capName,
+                        email: `${name.replace(/\s+/g,'_')}@auto.fairshare.com`,
+                        password_hash: null
+                    }, { transaction: t });
+                }
+                userMap[name] = user.id;
             }
-            userMap[name] = user.id;
         }
 
-        // 3. Create Group
-        const groupName = `Imported CSV: ${fileName || 'Data'}`;
-        const { Group } = require('../models');
-        const group = await Group.create({
-            name: groupName,
-            base_currency: 'INR'
-        }, { transaction: t });
-
-        // 4. Create Group Members
+        // 4. Create Group Members for Users
         const adminId = req.user.id;
-        await GroupMember.create({ group_id: group.id, user_id: adminId, role: 'admin', joined_at: new Date() }, { transaction: t });
+        await GroupMember.findOrCreate({
+            where: { group_id: group.id, user_id: adminId },
+            defaults: { role: 'admin', joined_at: new Date() },
+            transaction: t
+        });
         
         for (let name in userMap) {
             let uId = userMap[name];
@@ -468,12 +520,21 @@ exports.commitData = async (req, res) => {
             }
         }
 
+        // 5. Create Expenses and splits
         for (let rowData of rows) {
             if(rowData.status === 'error' || rowData.rejected) continue; // Skip errors and rejected
             const d = rowData.data;
 
             const payerName = d.paid_by.trim().toLowerCase();
-            const payerId = userMap[payerName] || adminId;
+            
+            let paid_by_user_id = null;
+            let paid_by_guest_id = null;
+            
+            if (guestMap[payerName]) {
+                paid_by_guest_id = guestMap[payerName];
+            } else {
+                paid_by_user_id = userMap[payerName] || adminId;
+            }
 
             let finalNotes = d.notes || '';
             if (rowData.changes_applied && rowData.changes_applied.length > 0) {
@@ -483,7 +544,8 @@ exports.commitData = async (req, res) => {
             const exp = await Expense.create({
                 group_id: group.id,
                 description: d.description,
-                paid_by_user_id: payerId,
+                paid_by_user_id,
+                paid_by_guest_id,
                 amount: d.base_amount, 
                 currency: d.currency || 'INR', 
                 exchange_rate_to_base: d.exchange_rate_to_base || 1.0,
@@ -495,7 +557,10 @@ exports.commitData = async (req, res) => {
             }, { transaction: t });
 
             // Create Splits
-            let splitMembers = d.parsed_split_details ? Object.keys(d.parsed_split_details) : Object.keys(userMap);
+            let splitMembers = d.parsed_split_details 
+                ? Object.keys(d.parsed_split_details) 
+                : (d.split_with ? d.split_with.split(';').map(n => normalizeName(n, ACTIVE_MEMBERS)) : Object.keys(userMap).concat(Object.keys(guestMap)));
+            
             let validSplitMembers = [];
             
             // Check temporal bounds!
@@ -513,7 +578,15 @@ exports.commitData = async (req, res) => {
 
             for (let i = 0; i < validSplitMembers.length; i++) {
                 let member = validSplitMembers[i];
-                const mId = userMap[member] || adminId;
+                
+                let user_id = null;
+                let guest_id = null;
+                if (guestMap[member]) {
+                    guest_id = guestMap[member];
+                } else {
+                    user_id = userMap[member] || adminId;
+                }
+
                 let actualShareBig;
                 
                 if (d.parsed_split_details && d.split_type === 'percentage') {
@@ -531,7 +604,8 @@ exports.commitData = async (req, res) => {
 
                 await ExpenseSplit.create({
                     expense_id: exp.id,
-                    user_id: mId,
+                    user_id,
+                    guest_id,
                     calculated_share_amount: actualShareBig.toNumber(),
                     raw_split_value: null
                 }, { transaction: t });

@@ -56,3 +56,57 @@ exports.getMe = async (req, res) => {
     res.status(500).json({ error: 'Server error fetching profile' });
   }
 };
+
+exports.convertGuestToUser = async (req, res) => {
+  try {
+    const { name, email, password, guestId } = req.body;
+    const { Guest, ExpenseSplit, Expense, GroupMember } = require('../models');
+
+    const guest = await Guest.findByPk(guestId);
+    if (!guest) return res.status(404).json({ error: 'Guest profile not found' });
+
+    const existingUser = await User.findOne({ where: { email } });
+    if (existingUser) return res.status(400).json({ error: 'Email already in use' });
+
+    const salt = await bcrypt.genSalt(10);
+    const password_hash = await bcrypt.hash(password, salt);
+
+    const user = await User.create({ name, email, password_hash });
+
+    await ExpenseSplit.update(
+      { user_id: user.id, guest_id: null },
+      { where: { guest_id: guestId } }
+    );
+
+    await Expense.update(
+      { paid_by_user_id: user.id, paid_by_guest_id: null },
+      { where: { paid_by_guest_id: guestId } }
+    );
+
+    if (guest.group_id) {
+      await GroupMember.findOrCreate({
+        where: { group_id: guest.group_id, user_id: user.id },
+        defaults: { role: 'member', joined_at: new Date() }
+      });
+    }
+
+    await guest.destroy();
+
+    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+
+    res.status(200).json({ token, user: { id: user.id, name: user.name, email: user.email } });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to promote guest to user' });
+  }
+};
+
+exports.getUnclaimedGuests = async (req, res) => {
+  try {
+    const { Guest } = require('../models');
+    const guests = await Guest.findAll({ attributes: ['id', 'name', 'group_id'] });
+    res.json({ guests });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve guest list' });
+  }
+};

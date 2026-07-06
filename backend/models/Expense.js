@@ -17,7 +17,11 @@ const Expense = sequelize.define('Expense', {
   },
   paid_by_user_id: {
     type: DataTypes.UUID,
-    allowNull: false,
+    allowNull: true,
+  },
+  paid_by_guest_id: {
+    type: DataTypes.UUID,
+    allowNull: true,
   },
   amount: {
     type: DataTypes.DECIMAL(12, 4),

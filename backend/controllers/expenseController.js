@@ -135,43 +135,47 @@ ${distributionLines}`;
 exports.exportCSV = async (req, res) => {
     try {
         const { groupId } = req.params;
+        const { Guest } = require('../models');
 
         // Fetch Expenses with Payer and Splits with Participants
         const expenses = await Expense.findAll({
             where: { group_id: groupId },
             include: [
                 { model: User, as: 'Payer', attributes: ['name'] },
+                { model: Guest, as: 'GuestPayer', attributes: ['name'] },
                 { 
                     model: ExpenseSplit, 
-                    include: [{ model: User, as: 'Participant', attributes: ['name'] }] 
+                    include: [
+                        { model: User, as: 'Participant', attributes: ['name'] },
+                        { model: Guest, as: 'GuestParticipant', attributes: ['name'] }
+                    ] 
                 }
             ],
             order: [['date', 'ASC']]
         });
 
         const csvData = expenses.map(exp => {
-            // Reconstruct original amount (reverse base_amount conversion for display)
-            // Or just export the stored amount. The prompt wants exact structural match:
-            // date | description | paid_by | amount | currency | split_type | split_with | split_details | notes
-            
             const originalAmount = exp.currency === 'USD' 
                  ? Big(exp.amount).div(exp.exchange_rate_to_base).round(4).toNumber() 
                  : exp.amount;
 
             // Format splits
-            const splitWithNames = exp.ExpenseSplits.map(s => s.Participant.name).join(';');
+            const getParticipantName = s => s.Participant ? s.Participant.name : (s.GuestParticipant ? s.GuestParticipant.name : 'Unknown');
+            const splitWithNames = exp.ExpenseSplits.map(getParticipantName).join(';');
             
             let splitDetailsStr = '';
             if (exp.split_type === 'percentage') {
-                splitDetailsStr = exp.ExpenseSplits.map(s => `${s.Participant.name}:${s.raw_split_value}%`).join(', ');
+                splitDetailsStr = exp.ExpenseSplits.map(s => `${getParticipantName(s)}:${s.raw_split_value}%`).join(', ');
             } else if (exp.split_type !== 'equal') {
-                splitDetailsStr = exp.ExpenseSplits.map(s => `${s.Participant.name}:${s.raw_split_value}`).join(', ');
+                splitDetailsStr = exp.ExpenseSplits.map(s => `${getParticipantName(s)}:${s.raw_split_value}`).join(', ');
             }
+
+            const payerName = exp.Payer ? exp.Payer.name : (exp.GuestPayer ? exp.GuestPayer.name : 'Unknown');
 
             return {
                 date: exp.date,
                 description: exp.description,
-                paid_by: exp.Payer.name,
+                paid_by: payerName,
                 amount: originalAmount,
                 currency: exp.currency,
                 split_type: exp.split_type,
@@ -194,13 +198,18 @@ exports.exportCSV = async (req, res) => {
 exports.getExpenses = async (req, res) => {
     try {
         const { groupId } = req.params;
+        const { Guest } = require('../models');
         const expenses = await Expense.findAll({
             where: { group_id: groupId },
             include: [
                 { model: User, as: 'Payer', attributes: ['name'] },
+                { model: Guest, as: 'GuestPayer', attributes: ['name'] },
                 { 
                     model: ExpenseSplit, 
-                    include: [{ model: User, as: 'Participant', attributes: ['name'] }] 
+                    include: [
+                        { model: User, as: 'Participant', attributes: ['name'] },
+                        { model: Guest, as: 'GuestParticipant', attributes: ['name'] }
+                    ] 
                 }
             ],
             order: [['date', 'ASC']]
