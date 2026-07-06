@@ -344,54 +344,85 @@ exports.processCSV = async (req, res) => {
                 }
                 parsedRow.split_type = row.split_type || 'equal';
 
-                // 7. Percentage Breakdown Discrepancies
-                if (row.split_details && (row.split_type === 'percentage' || hasConflictingSplit)) {
+                // 7 & 12. Percentage and Unequal Breakdown Discrepancies
+                if (row.split_details && (row.split_type === 'percentage' || row.split_type === 'unequal' || hasConflictingSplit)) {
                     const parts = row.split_details.split(',').map(s => s.split(':'));
-                    let totalPct = Big(0);
+                    let totalVal = Big(0);
                     let details = {};
                     let invalidFormat = false;
+                    let hasZero = false;
+                    let hasNegative = false;
 
-                    parts.forEach(([name, pct]) => {
+                    parts.forEach(([name, val]) => {
                         const matchedName = checkKnownMember(name);
                         const nName = matchedName || name.trim();
-                        if (!pct) {
+                        if (!val) {
                             invalidFormat = true;
                             details[nName] = Big(0);
                             return;
                         }
                         try {
-                            const p = Big(pct.trim().replace('%', ''));
-                            totalPct = totalPct.plus(p);
-                            details[nName] = p;
+                            let cleanVal = val.trim();
+                            if (row.split_type === 'percentage') cleanVal = cleanVal.replace('%', '');
+                            else cleanVal = cleanVal.replace(/[^0-9.-]/g, ''); // unequal: strip currency symbols
+                            
+                            const p = Big(cleanVal);
+                            if (p.lt(0)) hasNegative = true;
+                            if (p.eq(0)) hasZero = true;
+
+                            let share = p;
+                            if (row.split_type === 'unequal' && exchangeRate !== 1.0) {
+                                share = p.times(exchangeRate).round(2);
+                            }
+
+                            totalVal = totalVal.plus(share);
+                            details[nName] = share;
                         } catch (e) {
                             invalidFormat = true;
                             details[nName] = Big(0);
                         }
                     });
 
+                    if (hasNegative) {
+                        errors.push(`Negative amount found in ${row.split_type} split. Not allowed.`);
+                    }
+                    if (hasZero) {
+                        warnings.push(`Zero amount found in ${row.split_type} split. Proceeding with 0 liability.`);
+                    }
+
                     if (invalidFormat) {
-                        errors.push('Invalid split_details format for percentage. Expected "Name:XX%, Name:YY%"');
+                        errors.push(`Invalid split_details format for ${row.split_type}. Expected "Name:Value, Name:Value"`);
                         let parsedDet = {};
                         ACTIVE_MEMBERS.forEach(m => parsedDet[m] = 0);
                         parsedRow.raw_split_details = parsedDet;
-                    } else if (!totalPct.eq(100)) {
-                        warnings.push(`Percentages sum to ${totalPct.toString()}%. Normalized to 100%.`);
-                        let normalizedDetails = {};
-                        for (let nName in details) {
-                            normalizedDetails[nName] = details[nName].div(totalPct).times(100).round(2).toNumber();
+                    } else if (row.split_type === 'percentage') {
+                        if (!totalVal.eq(100)) {
+                            warnings.push(`Percentages sum to ${totalVal.toString()}%. Normalized to 100%.`);
+                            let normalizedDetails = {};
+                            for (let nName in details) {
+                                normalizedDetails[nName] = details[nName].div(totalVal).times(100).round(2).toNumber();
+                            }
+                            parsedRow.parsed_split_details = normalizedDetails;
+                            let parsedDet = {};
+                            for (let k in details) parsedDet[k] = details[k].toNumber();
+                            parsedRow.raw_split_details = parsedDet;
+                        } else {
+                            let parsedDet = {};
+                            for (let k in details) parsedDet[k] = details[k].toNumber();
+                            parsedRow.parsed_split_details = parsedDet;
+                            parsedRow.raw_split_details = parsedDet;
                         }
-                        parsedRow.parsed_split_details = normalizedDetails;
-                        let parsedDet = {};
-                        for (let k in details) parsedDet[k] = details[k].toNumber();
-                        parsedRow.raw_split_details = parsedDet;
-                    } else {
+                    } else if (row.split_type === 'unequal') {
+                        if (!totalVal.eq(parsedRow.base_amount)) {
+                            errors.push(`Unequal splits sum to ${totalVal.toString()} (base currency), which does not match total expense amount ${parsedRow.base_amount}.`);
+                        }
                         let parsedDet = {};
                         for (let k in details) parsedDet[k] = details[k].toNumber();
                         parsedRow.parsed_split_details = parsedDet;
                         parsedRow.raw_split_details = parsedDet;
                     }
-                } else if (row.split_type === 'percentage' && !row.split_details) {
-                    errors.push('Invalid split_details format for percentage. Expected "Name:XX%, Name:YY%"');
+                } else if ((row.split_type === 'percentage' || row.split_type === 'unequal') && !row.split_details) {
+                    errors.push(`Invalid split_details format for ${row.split_type}. Expected "Name:Value, Name:Value"`);
                     let parsedDet = {};
                     ACTIVE_MEMBERS.forEach(m => parsedDet[m] = 0);
                     parsedRow.raw_split_details = parsedDet;
@@ -905,12 +936,14 @@ exports.commitData = async (req, res) => {
 
                 if (d.parsed_split_details && d.split_type === 'percentage') {
                     actualShareBig = baseAmountBig.times(d.parsed_split_details[member] || 0).div(100).round(4);
+                } else if (d.parsed_split_details && d.split_type === 'unequal') {
+                    actualShareBig = Big(d.parsed_split_details[member] || 0).round(4);
                 } else {
                     actualShareBig = baseAmountBig.div(validSplitMembers.length).round(4);
                 }
 
-                // Zero-Sum logic: distribute sub-cent rounding fractions to the last member
-                if (i === validSplitMembers.length - 1) {
+                // Zero-Sum logic: distribute sub-cent rounding fractions to the last member (only for non-unequal splits)
+                if (d.split_type !== 'unequal' && i === validSplitMembers.length - 1) {
                     actualShareBig = baseAmountBig.minus(totalAllocated).round(4);
                 }
 
@@ -923,6 +956,11 @@ exports.commitData = async (req, res) => {
                     calculated_share_amount: actualShareBig.toNumber(),
                     raw_split_value: null
                 }, { transaction: t });
+            }
+
+            // 7.b Strict Zero-Sum Validation for Unequal Splits in Transaction
+            if (d.split_type === 'unequal' && !totalAllocated.eq(baseAmountBig)) {
+                throw new Error(`Zero-Sum Validation Failed for unequal split on Expense '${d.description}'. Sum of shares (${totalAllocated.toString()}) does not equal total amount (${baseAmountBig.toString()}).`);
             }
         }
         await t.commit();
