@@ -1,94 +1,254 @@
 # SCOPE.md: Data Ingestion Architecture, Anomaly Log & Relational Schema
 
-This document details the engineering specifications of the Ingest & Pipeline Sanitizer engine, the automated anomaly logging policies, and the PostgreSQL relational database schema optimized for zero-loss financial ledger execution.
+This document details the engineering specifications of the Ingest & Pipeline Sanitizer engine (`csvSanitizer.js`), all automated anomaly logging policies, the duplicate detection system, the typo correction flow, and the database schema.
 
 ---
 
-## 1. Automated Anomaly Log & Universal Resolution Policies
+## 1. Automated Anomaly Detection & Resolution Policies
 
-The `csvSanitizer.js` module treats incoming raw multi-user files as a stream of unverified mutations. The pipeline is architected to catch anomalies, isolate the faulty structural blocks, compute a deterministic corrected safe-state, and visually surface the breakdown to the user via interactive glassmorphic validation views instead of running silent data overrides.
+The `csvSanitizer.js` module treats incoming CSV files as a stream of unverified mutations. For every row, it runs a sequential set of structural checks, intercepts anomalies, and **never commits silently** — every decision is surfaced to the user via the interactive wizard.
 
-| CSV Data Problem | Algorithmic Detection Logic | Production Engineering Resolution Policy (Source of Truth) |
-| :--- | :--- | :--- |
-| **Payer Omission** | Checks if `paid_by` string parameter evaluates to null, empty, or fails string length validation after trimming. | **State Blocked.** System flags row state as `CRITICAL_MISSING_DATA`. Transacting to ledger tables is suspended until the user interacts with the UI dropdown to explicitly map a valid authenticated User ID. |
-| **Financial Currency Inconsistencies** | Regular expression `/[^\d.-]/g` scans the incoming balance string arrays for layout anomalies like commas (`1,200`). | **Arbitrage Protection.** Commas are programmatically stripped from the text string. The clean token is passed to `Big.js` for execution. Raw JS floating-point conversion (`parseFloat`) is strictly banned to prevent structural data decay. |
-| **Floating-Point Overflows** | Intercepts numeric input sizes exceeding two decimal places (e.g., `899.995`). | **Deterministic Financial Rounding.** Applies Half-Even Rounding (Banker's Rounding) on the database mapping layer (`NUMERIC(12,4)`) and backend services, clamping outputs to exactly 2 decimal places to maintain net group balance equilibrium ($\sum \Delta \equiv 0$). |
-| **Entity Inconsistency / Name Typos** | Fuzzy token matching (Levenshtein Distance algorithm with an execution threshold constraint $\le 2$) cross-checks naming variants (e.g., `Priya S`, `priya`) against the database user registry. | **Entity Normalization.** Case-insensitive sanitization maps varied name strings to a unified, distinct relational primary key `user_id`. This prevents balance leakage across duplicate or phantom sub-profiles. |
-| **Duplicate Transaction Collision** | Hashes input vectors using a composite cryptomap: `MD5(date + lower_case(description) + amount + paid_by)`. Catches semantic intersection blocks (e.g., "Dinner at Thalassa" vs "Thalassa dinner"). | **Interactive Concurrency Control.** The pipeline flags intersections as a `POTENTIAL_DUPLICATE`. The transaction is safely cached in global state, forcing a UI alert ("Meera's Box") requiring explicit user action to drop, merge, or force commit. |
-| **Non-Standard Date Mapping** | A multi-token verification array maps input string records against ISO-8601 formatting rules to catch variant inputs (`YYYY-MM-DD`, `DD/MM/YYYY`, `MMM DD`). | **Temporal Standardization.** Parses arbitrary time markers using robust date utilities, converting every entry to unified `YYYY-MM-DD` standard ISO elements before running ledger computations or PostgreSQL indexing. |
-| **Settlement Interception** | Text mining logic parses the description parameter using an array sequence containing lexical markers like `"paid back"`, `"settled"`, `"repaid"`. | **Transaction Rerouting.** Intercepts the record entry, flags `is_settlement: true`, and bypasses the shared expense allocation algorithm. The value is routed to a peer-to-peer (P2P) debt reduction engine to adjust current group balances. |
-| **Percentage Distribution Errors** | Validates internal split weights across custom entry streams, verifying if the target equation results in an unbalanced calculation ($\sum\% \neq 100\%$, e.g., $30+30+30+20=110\%$). | **Dynamic Normalization.** Throws a `MATH_OVERFLOW` warning state. Automatically normalizes the relative ratios ($W_i = \frac{p_i}{\sum p}$) to 100%, updating the schema visualization while maintaining user allocation intents. |
-| **Missing Currency Indicators** | Scans if the incoming string record length inside the explicit currency column parameter is zero or undefined. | **Fallback Configuration.** Inherits the fallback configuration values declared in the Group's primary parameter records (system defaults to `INR`). |
-| **Cross-Border Multi-Currency Assets** | Evaluates the string currency code array. Identifies non-base transaction components (e.g., `USD` inputs mapped within an `INR` group design). | **Foreign Exchange Mapping.** Couples calculation chains with a deterministic historical conversion rate ($1 \text{ USD} = 83.50 \text{ INR}$). Keeps the raw foreign inputs (`original_currency`) alongside normalized base fields for audit tracking. |
-| **Negative Input Inversion** | Parses if an absolute transaction balance string contains a negative prefix (`-30`). | **Transaction Inversion Layer.** Re-classifies the row entry as a `Refund`. The system processes the absolute amount as a positive value but programmatically reverses the transaction topology: the payer is credited, and split entities are moved to debit frames. |
-| **Dynamic Membership Exclusions** | Cross-references individual transaction timestamps against a member's active occupancy logging metrics: `group_members.joined_at` and `group_members.left_at`. | **Universal Pro-Rata Temporal Split Engine.** Evaluates user active footprints relative to total calendar days in that billing month. If active days equal 0 (e.g., Meera in April), liability drops to `0.00`. If a user is a mid-month entry (e.g., Sam on April 8, active for 23/30 days), their liability scales by $\frac{\text{Active Days}}{\text{Total Days in Month}}$. The remainder is dynamically absorbed by full-time residents. |
+| # | CSV Problem | Detection Logic | Resolution Policy |
+|---|---|---|---|
+| **1** | **Payer Omission** | Checks if `paid_by` is null/empty after trim | **Blocked.** Row flagged `CRITICAL_MISSING_DATA`. Database commit suspended until user maps a valid name via UI |
+| **2** | **Comma-Formatted Numbers** | `replace(/[^0-9.-]/g, '')` strips commas, `₹`, `$` etc. | **Arbitrage Protection.** Clean string passed to `Big.js`. Native `parseFloat` banned |
+| **3** | **Floating-Point Overflow** | Detects >2 decimal places (e.g., ₹899.995) | **Banker's Rounding.** `Big.roundHalfEven` clamps to 2dp. Sub-cent fraction absorbed by last member (Zero-Sum) |
+| **4** | **Name Typos / Case Variants** | Levenshtein Distance ≤ 2 against all registered users | **"Did you mean?" Popup.** User picks: remap to existing / keep as Guest / create new User |
+| **5** | **Duplicate Transactions (Batch)** | O(1) Hash Map: `date_amount_payer_currency` key | **Confidence Warning.** 100% exact, 90% description typo, 70% date ±1 day. Split members also compared |
+| **6** | **Duplicate Transactions (DB)** | Pre-scan DB expenses via indexed `dbMap` | **DB Duplicate Warning.** If committed, `[System Note]` appended to expense notes with confidence % and matched ID |
+| **7** | **Non-Standard Date Formats** | `new Date(dateStr)` → ISO 8601 normalization | **Temporal Standardization.** All dates stored as `YYYY-MM-DD` |
+| **8** | **Settlement Entries** | Text mining: "paid back", "settlement", "repaid" | **Rerouted.** `is_settlement: true` bypasses split engine, routes to P2P debt reduction |
+| **9** | **Percentage Sums ≠ 100%** | Sum of split weights checked (e.g., 30+30+30+20=110%) | **Dynamic Normalization.** Weights renormalized: Wᵢ = pᵢ / Σp. User visually verifies |
+| **10** | **Missing Currency** | `currency` column empty or undefined | **Fallback.** Inherits group base currency (default: INR) |
+| **11** | **Multi-Currency (USD/EUR etc.)** | Non-INR currency code detected | **FX Mapping.** Converts to INR base amount using fixed rates. Both original + base stored |
+| **12** | **Negative Amounts** | Amount parsed as negative (e.g., -15000) | **Refund Inversion.** Absolute value used, `is_refund: true` set. Payer credited, split members debited |
+| **13** | **Temporal Frontier Violations** | Cross-references expense date vs. `joined_at`/`left_at` | **Pro-Rata Engine.** MID_MONTH_JOINER and POST_EXIT anomalies detected. Fractional liability computed per active days |
 
 ---
 
-## 2. PostgreSQL Entity-Relationship (ER) Schema
+## 2. Duplicate Detection System — Deep Specification
 
-To maintain exact balances and prevent transactional anomalies, the platform uses a highly normalized relational database schema with referential integrity constraints and performance indexes.
+### 2.1 Helper Functions
+
+#### `normalizeDescription(desc)` — `csvSanitizer.js` line 45
+```javascript
+return desc.trim().toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ');
+// "Pizza!!!" → "pizza"  |  "PIZZA" → "pizza"  |  "pizza." → "pizza"
+```
+
+#### `calculateConfidence(row1, row2)` — `csvSanitizer.js` line 51
+Returns confidence score (0 = not duplicate, 70/90/100 = duplicate tiers):
+
+| Score | Condition |
+|---|---|
+| **0%** | Amount, currency, or payer doesn't match → not a duplicate |
+| **0%** | Date differs by more than 1 day |
+| **70%** | Date differs by exactly 1 day, everything else matches |
+| **90%** | Same date, same fields, description similarity ≥ 80% (typo only) |
+| **100%** | Exact match on all fields including normalized description |
+
+### 2.2 O(n) Batch Duplicate Check
+
+**Before (O(n²)):**
+```javascript
+for (let prev of processedRows) { // nested loop — slow for large CSVs
+    if (prev.data.date === parsedRow.date && ...)
+```
+
+**After (O(1) per row = O(n) total):**
+```javascript
+const batchKey = `${date}_${amount}_${payer}_${currency}`;
+if (processedMap.has(batchKey)) {
+    // O(1) lookup — then compare splits + confidence
+}
+```
+
+### 2.3 Database Duplicate Check
+
+At `processCSV` startup, all active DB expenses are pre-fetched and indexed:
+```javascript
+const dbMap = new Map(); // "date_amount_payerId_currency" → [expense]
+```
+
+Before flagging, split members are also compared:
+- `dbSplits` (from `ExpenseSplit` records) vs `curSplits` (from CSV row)
+- Only flags if **both key fields AND split members match exactly**
+- Pizza/Aisha/Rohan ≠ Pizza/Aisha/Priya → **not a duplicate** ✅
+
+### 2.4 commitData Pre-Insert Check
+
+Even at commit time, a final `Expense.findOne()` runs before `Expense.create()`:
+```javascript
+const existingMatch = await Expense.findOne({ where: dupWhere, transaction: t });
+if (existingMatch) {
+    finalNotes += `[System Note]: Imported despite ${conf}% confidence duplicate match with Expense #${existingMatch.id}`;
+}
+```
+
+---
+
+## 3. Typo Correction Flow — "Did you mean?" Architecture
+
+### 3.1 Backend Detection — `findFuzzyMatch()` — line 170
+
+```javascript
+const findFuzzyMatch = (name) => {
+    const allKnown = [...ACTIVE_MEMBERS, ...Array.from(dbUserNames)];
+    // Find closest Levenshtein match with distance <= 2
+    for (const known of allKnown) {
+        const dist = levenshtein(lc, known.toLowerCase());
+        if (dist <= 2 && dist < bestDist) { bestDist = dist; bestMatch = known; }
+    }
+    return bestMatch ? { suggested: bestMatch, distance: bestDist } : null;
+};
+```
+
+### 3.2 Separation of Typos vs. Unknowns
+
+```
+Input: "Aishaa"
+    ↓ checkKnownMember() → null (not exact match)
+    ↓ findFuzzyMatch()   → { suggested: "aisha", distance: 1 }
+    ↓ Result: added to typo_suggestions[] NOT unknown_members[]
+```
+
+### 3.3 Frontend — "Did you mean?" Popup (`CSVProcessingWizard.jsx` line ~479)
+
+Three radio choices per suggestion:
+
+| Choice | Backend Resolution | What Happens |
+|---|---|---|
+| ✅ Yes, it's Aisha | `{ action: 'match', matched_name: 'aisha' }` | Typo name remapped to real user ID |
+| 👤 Keep as Guest "Aishaa" | `{ action: 'guest' }` | Guest profile created with original spelling |
+| 🆕 Create new User "Aishaa" | `{ action: 'user' }` | New User account registered |
+
+---
+
+## 4. Guest Entity System
+
+### 4.1 Guest Model Schema (`backend/models/Guest.js`)
+
+```javascript
+Guest {
+    id          INTEGER PRIMARY KEY,
+    name        STRING NOT NULL,
+    email       STRING (nullable),
+    phone       STRING (nullable),
+    notes       TEXT (nullable),
+    group_id    FK → Group,
+    user_id     FK → User (nullable) ← for Guest→User promotion
+}
+```
+
+### 4.2 Key Design Decisions
+
+- `Guest.findOrCreate()` used in `commitData` → no duplicate guests across multiple CSV imports
+- `convertGuestToUser()` links `guest.user_id` to existing User — history preserved
+- `calculateSettlements()` rolls up guest balance into linked user's balance if promoted
+- Guests appear in audit trail with their own label until promoted
+
+---
+
+## 5. Temporal Pro-Rata Engine
+
+### 5.1 Anomaly Types
+
+| Type | Description | Example |
+|---|---|---|
+| `POST_EXIT_MEMBER_BILLED` | Member included after their leave date | Meera in April (left Mar 31) → 0 days active → ₹0.00 |
+| `MID_MONTH_JOINER` | Member billed for days before they joined | Sam in April (joined Apr 8) → 23/30 days → 76.66% max |
+
+### 5.2 Mathematical Model
+
+```
+Active Days Ratio = Active Days in Month / Total Days in Month
+Max Liability     = Original Share × Active Days Ratio
+Redistributed     = (Original Share − Max Liability) spread across full-time members
+```
+
+Sam's April electricity bill (₹3000, 5 members):
+```
+Equal share = ₹600
+Sam's active days = 23/30 = 76.66%
+Sam's adjusted share = ₹600 × 0.7666 = ₹460
+Remaining ₹140 redistributed to Aisha, Rohan, Priya, Meera (full-time)
+```
+
+---
+
+## 6. Database Schema
 
 ```sql
--- Enable UUID extension for security against enumeration attacks
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
--- 1. Users Entity
+-- Users
 CREATE TABLE users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name VARCHAR(100) NOT NULL UNIQUE,
-    email VARCHAR(255) NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    id            SERIAL PRIMARY KEY,
+    name          VARCHAR(100) NOT NULL UNIQUE,
+    email         VARCHAR(255) NOT NULL UNIQUE,
+    password_hash TEXT,
+    created_at    TIMESTAMP DEFAULT NOW()
 );
 
--- 2. Groups Entity
+-- Guests (separate entity, not a User)
+CREATE TABLE guests (
+    id        SERIAL PRIMARY KEY,
+    name      VARCHAR(100) NOT NULL,
+    email     VARCHAR(255),
+    phone     VARCHAR(50),
+    notes     TEXT,
+    group_id  INTEGER REFERENCES groups(id),
+    user_id   INTEGER REFERENCES users(id),  -- nullable: set on promotion
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Groups
 CREATE TABLE groups (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name VARCHAR(150) NOT NULL,
+    id            SERIAL PRIMARY KEY,
+    name          VARCHAR(150) NOT NULL,
     base_currency VARCHAR(3) DEFAULT 'INR',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at    TIMESTAMP DEFAULT NOW()
 );
 
--- 3. Temporal Group Members Ledger (Tracks entry/exit over time)
+-- Temporal Group Members (tracks join/leave dates)
 CREATE TABLE group_members (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    group_id UUID REFERENCES groups(id) ON DELETE CASCADE,
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    joined_at DATE NOT NULL,
-    left_at DATE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    id         SERIAL PRIMARY KEY,
+    group_id   INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+    user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    role       VARCHAR(20) DEFAULT 'member',
+    joined_at  DATE NOT NULL,
+    left_at    DATE,
     CONSTRAINT chk_timeline CHECK (left_at IS NULL OR left_at >= joined_at)
 );
 
--- 4. Expenses Ledger Entity
-CREATE TYPE split_enum AS ENUM ('equal', 'unequal', 'percentage', 'share');
+-- Expenses (supports both user and guest payers)
 CREATE TABLE expenses (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    group_id UUID REFERENCES groups(id) ON DELETE CASCADE,
-    description TEXT NOT NULL,
-    paid_by_user_id UUID REFERENCES users(id) ON DELETE RESTRICT,
-    amount NUMERIC(12, 4) NOT NULL,
-    currency VARCHAR(3) DEFAULT 'INR',
-    exchange_rate_to_base NUMERIC(12, 6) DEFAULT 1.000000,
-    split_type split_enum NOT NULL,
-    date DATE NOT NULL,
-    notes TEXT,
-    is_settlement BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    id                    SERIAL PRIMARY KEY,
+    group_id              INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+    description           TEXT NOT NULL,
+    paid_by_user_id       INTEGER REFERENCES users(id),
+    paid_by_guest_id      INTEGER REFERENCES guests(id),
+    amount                NUMERIC(12,4) NOT NULL,
+    currency              VARCHAR(3) DEFAULT 'INR',
+    exchange_rate_to_base NUMERIC(12,6) DEFAULT 1.0,
+    split_type            VARCHAR(20),
+    date                  DATE NOT NULL,
+    notes                 TEXT,
+    is_settlement         BOOLEAN DEFAULT FALSE,
+    status                VARCHAR(20) DEFAULT 'active',
+    created_at            TIMESTAMP DEFAULT NOW()
 );
 
--- 5. Granular Expense Splits Entity (Stores final computed exact amounts)
+-- Expense Splits (supports both user and guest participants)
 CREATE TABLE expense_splits (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    expense_id UUID REFERENCES expenses(id) ON DELETE CASCADE,
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    calculated_share_amount NUMERIC(12, 4) NOT NULL,
-    raw_split_value NUMERIC(12, 4), -- Stores inputted %, share value or raw money
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    id                      SERIAL PRIMARY KEY,
+    expense_id              INTEGER REFERENCES expenses(id) ON DELETE CASCADE,
+    user_id                 INTEGER REFERENCES users(id),
+    guest_id                INTEGER REFERENCES guests(id),
+    calculated_share_amount NUMERIC(12,4) NOT NULL,
+    raw_split_value         NUMERIC(12,4)
 );
 
--- PERFORMANCE OPTIMIZATION INDEXES
-CREATE INDEX idx_group_members_timeline ON group_members(group_id, user_id, joined_at, left_at);
-CREATE INDEX idx_expenses_group_date ON expenses(group_id, date);
-CREATE INDEX idx_splits_expense_user ON expense_splits(expense_id, user_id);
+-- Performance Indexes
+CREATE INDEX idx_expenses_group_date   ON expenses(group_id, date);
+CREATE INDEX idx_expenses_payer        ON expenses(paid_by_user_id, status);
+CREATE INDEX idx_splits_expense        ON expense_splits(expense_id);
+```
