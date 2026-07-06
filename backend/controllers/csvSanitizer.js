@@ -638,28 +638,55 @@ exports.processCSV = async (req, res) => {
 exports.commitData = async (req, res) => {
     const { rows, fileName, resolutions = {} } = req.body;
 
-    // 1. Validation: Extract all unique unknown members from rows
-    const detectedUnknownMembers = new Set();
+    // 1. Validation: Collect all names that require user resolution
+    //    - unknown_members: names with no exact or fuzzy match
+    //    - typo_suggestions: names with fuzzy match (require "match"/"guest"/"user" choice)
+    const detectedUnknownMembers = new Set();  // needs 'guest' or 'user'
+    const detectedTypoCandidates = new Set();  // needs 'match', 'guest', or 'user'
+
     rows.forEach(rowData => {
         if (rowData.status === 'error') return;
         const d = rowData.data;
         if (d.unknown_members) {
             d.unknown_members.forEach(m => detectedUnknownMembers.add(m.trim().toLowerCase()));
         }
+        // Bug Fix: typo suggestions also need user confirmation
+        if (d.typo_suggestions) {
+            d.typo_suggestions.forEach(s => detectedTypoCandidates.add(s.original.trim().toLowerCase()));
+        }
     });
 
-    // 2. Validate that every detected unknown member has a valid resolution mapping
+    // 2. Validate unknown members — must resolve as 'guest' or 'user'
     for (let member of Array.from(detectedUnknownMembers)) {
         const matchedKey = Object.keys(resolutions).find(k => k.trim().toLowerCase() === member);
         if (!matchedKey) {
-            return res.status(400).json({ error: `Missing resolution mapping for unknown participant: ${member}` });
+            return res.status(400).json({ error: `Missing resolution for unknown participant: "${member}". Please resolve in the wizard before committing.` });
         }
         const resolution = resolutions[matchedKey];
         const action = typeof resolution === 'string' ? resolution : resolution.action;
         if (action !== 'guest' && action !== 'user') {
-            return res.status(400).json({ error: `Invalid resolution action for '${member}': must be 'guest' or 'user'` });
+            return res.status(400).json({ error: `Invalid resolution action for unknown member "${member}": must be 'guest' or 'user', got '${action}'` });
         }
     }
+
+    // 3. Validate typo candidates — must resolve as 'match', 'guest', or 'user'
+    //    Bug Fix (Major): 'match' was previously rejected by validation — now correctly allowed
+    for (let member of Array.from(detectedTypoCandidates)) {
+        const matchedKey = Object.keys(resolutions).find(k => k.trim().toLowerCase() === member);
+        if (!matchedKey) {
+            return res.status(400).json({ error: `Missing resolution for typo candidate: "${member}". Please confirm "Did you mean?" in the wizard before committing.` });
+        }
+        const resolution = resolutions[matchedKey];
+        const action = typeof resolution === 'string' ? resolution : resolution.action;
+        // 'match' MUST include a matched_name to be valid
+        if (action === 'match' && !resolution.matched_name) {
+            return res.status(400).json({ error: `Resolution 'match' for "${member}" is missing matched_name field.` });
+        }
+        if (action !== 'guest' && action !== 'user' && action !== 'match') {
+            return res.status(400).json({ error: `Invalid resolution action for typo candidate "${member}": must be 'guest', 'user', or 'match', got '${action}'` });
+        }
+    }
+
 
     const t = await sequelize.transaction();
     try {
