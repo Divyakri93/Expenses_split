@@ -371,7 +371,9 @@ const createRowValidator = (context) => {
                         parsedRow.date = Array.from(validDates)[0];
                     } else if (validDates.size > 1) {
                         parsedRow.needs_resolution = true;
-                        parsedRow.resolution_type = 'date';
+                        parsedRow.resolution_type = 'ambiguous_date';
+                        parsedRow.original_date = dateStr;
+                        parsedRow.possible_dates = Array.from(validDates);
                         parsedRow.date_metadata = {
                             original: dateStr,
                             valid_interpretations: Array.from(validDates),
@@ -894,8 +896,9 @@ exports.commitData = async (req, res) => {
 
         if (d.dateResolution) {
             const dr = d.dateResolution;
-            if (dr.action === 'resolve' && dr.date) {
-                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), date: dr.date };
+            const resolvedDate = dr.selectedDate || dr.date;
+            if (resolvedDate) {
+                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), date: resolvedDate };
             } else if (dr.action === 'skip') {
                 r.status = 'rejected';
             }
