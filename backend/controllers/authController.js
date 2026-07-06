@@ -60,7 +60,7 @@ exports.getMe = async (req, res) => {
 exports.convertGuestToUser = async (req, res) => {
   try {
     const { name, email, password, guestId } = req.body;
-    const { Guest, ExpenseSplit, Expense, GroupMember } = require('../models');
+    const { Guest, GroupMember } = require('../models');
 
     const guest = await Guest.findByPk(guestId);
     if (!guest) return res.status(404).json({ error: 'Guest profile not found' });
@@ -73,15 +73,9 @@ exports.convertGuestToUser = async (req, res) => {
 
     const user = await User.create({ name, email, password_hash });
 
-    await ExpenseSplit.update(
-      { user_id: user.id, guest_id: null },
-      { where: { guest_id: guestId } }
-    );
-
-    await Expense.update(
-      { paid_by_user_id: user.id, paid_by_guest_id: null },
-      { where: { paid_by_guest_id: guestId } }
-    );
+    // Link the guest record to the user ID
+    guest.user_id = user.id;
+    await guest.save();
 
     if (guest.group_id) {
       await GroupMember.findOrCreate({
@@ -89,8 +83,6 @@ exports.convertGuestToUser = async (req, res) => {
         defaults: { role: 'member', joined_at: new Date() }
       });
     }
-
-    await guest.destroy();
 
     const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
 
@@ -104,7 +96,10 @@ exports.convertGuestToUser = async (req, res) => {
 exports.getUnclaimedGuests = async (req, res) => {
   try {
     const { Guest } = require('../models');
-    const guests = await Guest.findAll({ attributes: ['id', 'name', 'group_id'] });
+    const guests = await Guest.findAll({ 
+      where: { user_id: null },
+      attributes: ['id', 'name', 'group_id'] 
+    });
     res.json({ guests });
   } catch (err) {
     res.status(500).json({ error: 'Failed to retrieve guest list' });

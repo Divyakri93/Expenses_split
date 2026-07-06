@@ -6,7 +6,27 @@ exports.calculateSettlements = async (req, res) => {
     try {
         const { groupId } = req.params;
 
-        // 1. Fetch all expenses for this group
+        // 1. Fetch all guests for this group to resolve Guest -> User link promotions
+        const guests = await Guest.findAll({ where: { group_id: groupId } });
+        const guestToUserMap = {};
+        guests.forEach(g => {
+            if (g.user_id) {
+                guestToUserMap[g.id] = g.user_id;
+            }
+        });
+
+        const getTargetId = (userId, guestId) => {
+            if (userId) return `user_${userId}`;
+            if (guestId) {
+                if (guestToUserMap[guestId]) {
+                    return `user_${guestToUserMap[guestId]}`;
+                }
+                return `guest_${guestId}`;
+            }
+            return 'unknown';
+        };
+
+        // 2. Fetch all expenses for this group
         const expenses = await Expense.findAll({
             where: { group_id: groupId, status: 'active' },
             include: [{ model: ExpenseSplit }]
@@ -15,7 +35,7 @@ exports.calculateSettlements = async (req, res) => {
         const balances = {}; // { prefixedId: netBalance (Big.js) }
 
         expenses.forEach(exp => {
-            const payerId = exp.paid_by_user_id ? `user_${exp.paid_by_user_id}` : `guest_${exp.paid_by_guest_id}`;
+            const payerId = getTargetId(exp.paid_by_user_id, exp.paid_by_guest_id);
             
             if (!balances[payerId]) balances[payerId] = Big(0);
 
@@ -25,7 +45,7 @@ exports.calculateSettlements = async (req, res) => {
 
             // Deduct from participants
             exp.ExpenseSplits.forEach(split => {
-                const pId = split.user_id ? `user_${split.user_id}` : `guest_${split.guest_id}`;
+                const pId = getTargetId(split.user_id, split.guest_id);
                 if (!balances[pId]) balances[pId] = Big(0);
                 
                 const share = Big(split.calculated_share_amount);
@@ -84,10 +104,11 @@ exports.calculateSettlements = async (req, res) => {
 
         // Map User and Guest IDs to Names for UI
         const users = await User.findAll();
-        const guests = await Guest.findAll({ where: { group_id: groupId } });
         const nameMap = {};
         users.forEach(u => nameMap[`user_${u.id}`] = u.name);
-        guests.forEach(g => nameMap[`guest_${g.id}`] = g.name);
+        guests.forEach(g => {
+            nameMap[`guest_${g.id}`] = g.name;
+        });
 
         const namedSettlements = settlements.map(s => ({
             fromName: nameMap[s.from] || 'Unknown',
@@ -105,15 +126,31 @@ exports.calculateSettlements = async (req, res) => {
 exports.getAuditTrail = async (req, res) => {
     try {
         const { userId } = req.params;
+        const { Op } = require('sequelize');
 
-        // Fetch all expenses where user is payer OR participant
+        // Fetch any Guest profiles linked to this User ID
+        const linkedGuests = await Guest.findAll({ where: { user_id: userId } });
+        const linkedGuestIds = linkedGuests.map(g => g.id);
+
+        // Fetch all expenses where user is payer OR any of their linked guests is payer
         const paidExpenses = await Expense.findAll({
-            where: { paid_by_user_id: userId, status: 'active' },
+            where: {
+                [Op.or]: [
+                    { paid_by_user_id: userId },
+                    { paid_by_guest_id: { [Op.in]: linkedGuestIds } }
+                ],
+                status: 'active'
+            },
             include: [{ model: ExpenseSplit }]
         });
 
         const splitExpenses = await ExpenseSplit.findAll({
-            where: { user_id: userId },
+            where: {
+                [Op.or]: [
+                    { user_id: userId },
+                    { guest_id: { [Op.in]: linkedGuestIds } }
+                ]
+            },
             include: [{ model: Expense }]
         });
 

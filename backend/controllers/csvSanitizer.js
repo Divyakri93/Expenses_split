@@ -42,21 +42,7 @@ const levenshtein = (a, b) => {
   return matrix[a.length][b.length];
 };
 
-const normalizeName = (name, activeMembers = []) => {
-  if (!name) return null;
-  const n = name.trim().toLowerCase();
-  // Simple typo mapping based on active members
-  let bestMatch = n;
-  let minDistance = 999;
-  for (let member of activeMembers) {
-    const dist = levenshtein(n, member);
-    if (dist <= 2 && dist < minDistance) {
-      minDistance = dist;
-      bestMatch = member;
-    }
-  }
-  return bestMatch; // Fallback to raw if no close match
-};
+
 
 exports.processCSV = async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
@@ -68,7 +54,37 @@ exports.processCSV = async (req, res) => {
 
   csv.parseStream(stream, { headers: true })
     .on('data', (row) => results.push(row))
-    .on('end', () => {
+    .on('end', async () => {
+      // Fetch all registered users in the database to check against
+      let dbUserNames = new Set();
+      try {
+          const dbUsers = await User.findAll({ attributes: ['name'] });
+          dbUserNames = new Set(dbUsers.map(u => u.name.trim().toLowerCase()));
+      } catch (err) {
+          console.error('Error fetching registered users:', err);
+      }
+
+      const getCaseInsensitiveMatch = (name, list) => {
+          if (!name) return null;
+          const lowercase = name.trim().toLowerCase();
+          return list.find(item => item.toLowerCase() === lowercase);
+      };
+
+      const checkKnownMember = (name) => {
+          if (!name) return null;
+          const cleanName = name.trim();
+          
+          // 1. Check exact/case-insensitive match in ACTIVE_MEMBERS
+          const activeMatch = getCaseInsensitiveMatch(cleanName, ACTIVE_MEMBERS);
+          if (activeMatch) return activeMatch;
+          
+          // 2. Check exact/case-insensitive match in DB users
+          const dbMatch = getCaseInsensitiveMatch(cleanName, Array.from(dbUserNames));
+          if (dbMatch) return dbMatch;
+          
+          return null; // Unknown participant
+      };
+
       // Process Policies
       results.forEach((row, index) => {
         let warnings = [];
@@ -84,10 +100,11 @@ exports.processCSV = async (req, res) => {
            return processedRows.push({ data: parsedRow, errors, warnings, status: 'error' });
         }
 
-        // 4. Name Variants/Typos
-        parsedRow.paid_by = normalizeName(row.paid_by, ACTIVE_MEMBERS);
+        // 4. Resolve Payer Name (No fuzzy matching if not matching exactly)
+        const matchedPayer = checkKnownMember(row.paid_by);
+        parsedRow.paid_by = matchedPayer || row.paid_by.trim();
 
-        // Parse and normalize split_with names
+        // Parse split_with names
         let splitWithNames = [];
         if (row.split_with) {
             splitWithNames = row.split_with.split(';').map(s => s.trim()).filter(Boolean);
@@ -100,15 +117,20 @@ exports.processCSV = async (req, res) => {
                 }
             });
         }
-        const normalizedInvolved = splitWithNames.map(name => normalizeName(name, ACTIVE_MEMBERS));
+        
+        // Normalize splits (exact case-insensitive match only, no fuzzy)
+        const normalizedInvolved = splitWithNames.map(name => {
+            const matched = checkKnownMember(name);
+            return matched || name.trim();
+        });
 
-        // Detect unknown members (not in ACTIVE_MEMBERS)
+        // Detect unknown members
         let unknownMembers = [];
-        if (parsedRow.paid_by && !ACTIVE_MEMBERS.includes(parsedRow.paid_by)) {
+        if (parsedRow.paid_by && !checkKnownMember(parsedRow.paid_by)) {
             unknownMembers.push(parsedRow.paid_by);
         }
         normalizedInvolved.forEach(name => {
-            if (name && !ACTIVE_MEMBERS.includes(name)) {
+            if (name && !checkKnownMember(name)) {
                 unknownMembers.push(name);
             }
         });
@@ -440,9 +462,32 @@ exports.processCSV = async (req, res) => {
 exports.commitData = async (req, res) => {
     const { rows, fileName, resolutions = {} } = req.body;
     
+    // 1. Validation: Extract all unique unknown members from rows
+    const detectedUnknownMembers = new Set();
+    rows.forEach(rowData => {
+        if (rowData.status === 'error') return;
+        const d = rowData.data;
+        if (d.unknown_members) {
+            d.unknown_members.forEach(m => detectedUnknownMembers.add(m.trim().toLowerCase()));
+        }
+    });
+
+    // 2. Validate that every detected unknown member has a valid resolution mapping
+    for (let member of Array.from(detectedUnknownMembers)) {
+        const matchedKey = Object.keys(resolutions).find(k => k.trim().toLowerCase() === member);
+        if (!matchedKey) {
+            return res.status(400).json({ error: `Missing resolution mapping for unknown participant: ${member}` });
+        }
+        const resolution = resolutions[matchedKey];
+        const action = typeof resolution === 'string' ? resolution : resolution.action;
+        if (action !== 'guest' && action !== 'user') {
+            return res.status(400).json({ error: `Invalid resolution action for '${member}': must be 'guest' or 'user'` });
+        }
+    }
+
     const t = await sequelize.transaction();
     try {
-        // 1. Create Group
+        // 3. Create Group
         const groupName = `Imported CSV: ${fileName || 'Data'}`;
         const { Group } = require('../models');
         const group = await Group.create({
@@ -450,7 +495,7 @@ exports.commitData = async (req, res) => {
             base_currency: 'INR'
         }, { transaction: t });
 
-        // 2. Extract Unique Names
+        // 4. Extract Unique Names
         const uniqueNames = new Set();
         rows.forEach(rowData => {
             if(rowData.status === 'error') return;
@@ -462,7 +507,7 @@ exports.commitData = async (req, res) => {
         });
         if (uniqueNames.size === 0) ACTIVE_MEMBERS.forEach(m => uniqueNames.add(m));
 
-        // 3. Separate Users vs. Guests
+        // 5. Separate Users vs. Guests
         const userMap = {}; // name -> userId
         const guestMap = {}; // name -> guestId
         
@@ -476,10 +521,20 @@ exports.commitData = async (req, res) => {
 
             if (isGuest) {
                 const capName = name.charAt(0).toUpperCase() + name.slice(1);
-                const guest = await Guest.create({
-                    name: capName,
-                    group_id: group.id
-                }, { transaction: t });
+                // Use findOrCreate to prevent duplicate Guest profiles
+                const [guest] = await Guest.findOrCreate({
+                    where: { 
+                        name: capName,
+                        group_id: group.id
+                    },
+                    defaults: {
+                        user_id: null,
+                        email: null,
+                        phone: null,
+                        notes: `Imported as guest via CSV`
+                    },
+                    transaction: t
+                });
                 guestMap[name] = guest.id;
             } else {
                 let user = await User.findOne({ where: sequelize.where(sequelize.fn('LOWER', sequelize.col('name')), name), transaction: t });
@@ -495,7 +550,7 @@ exports.commitData = async (req, res) => {
             }
         }
 
-        // 4. Create Group Members for Users
+        // 6. Create Group Members for Users
         const adminId = req.user.id;
         await GroupMember.findOrCreate({
             where: { group_id: group.id, user_id: adminId },
@@ -520,7 +575,7 @@ exports.commitData = async (req, res) => {
             }
         }
 
-        // 5. Create Expenses and splits
+        // 7. Create Expenses and splits
         for (let rowData of rows) {
             if(rowData.status === 'error' || rowData.rejected) continue; // Skip errors and rejected
             const d = rowData.data;
@@ -559,7 +614,18 @@ exports.commitData = async (req, res) => {
             // Create Splits
             let splitMembers = d.parsed_split_details 
                 ? Object.keys(d.parsed_split_details) 
-                : (d.split_with ? d.split_with.split(';').map(n => normalizeName(n, ACTIVE_MEMBERS)) : Object.keys(userMap).concat(Object.keys(guestMap)));
+                : (d.split_with 
+                    ? d.split_with.split(';').map(n => {
+                        const lowercase = n.trim().toLowerCase();
+                        const activeMatch = ACTIVE_MEMBERS.find(am => am.toLowerCase() === lowercase);
+                        if (activeMatch) return activeMatch;
+                        const matchedUserKey = Object.keys(userMap).find(k => k.toLowerCase() === lowercase);
+                        if (matchedUserKey) return matchedUserKey;
+                        const matchedGuestKey = Object.keys(guestMap).find(k => k.toLowerCase() === lowercase);
+                        if (matchedGuestKey) return matchedGuestKey;
+                        return lowercase;
+                      })
+                    : Object.keys(userMap).concat(Object.keys(guestMap)));
             
             let validSplitMembers = [];
             

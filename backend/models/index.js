@@ -39,6 +39,10 @@ ExpenseSplit.belongsTo(Guest, { as: 'GuestParticipant', foreignKey: 'guest_id', 
 Guest.belongsTo(Group, { foreignKey: 'group_id', onDelete: 'CASCADE' });
 Group.hasMany(Guest, { foreignKey: 'group_id', onDelete: 'CASCADE' });
 
+// Guest <-> User linking
+Guest.belongsTo(User, { foreignKey: 'user_id', as: 'LinkedUser', onDelete: 'SET NULL' });
+User.hasOne(Guest, { foreignKey: 'user_id', as: 'GuestProfile', onDelete: 'SET NULL' });
+
 // Group -> Message
 Group.hasMany(Message, { foreignKey: 'group_id', onDelete: 'CASCADE' });
 Message.belongsTo(Group, { foreignKey: 'group_id', onDelete: 'CASCADE' });
