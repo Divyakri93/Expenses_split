@@ -462,17 +462,47 @@ const createRowValidator = (context) => {
 
                 if (!parsedRow.is_settlement) {
                 // 12. Conflicting Split Definitions
-                let hasConflictingSplit = false;
-                if (row.split_type === 'equal' && row.split_details) {
-                    hasConflictingSplit = true;
-                }
                 let parsedType = row.split_type ? row.split_type.toLowerCase() : 'equal';
                 if (parsedType === 'ratio' || parsedType === 'share_ratio') parsedType = 'share';
                 parsedRow.split_type = parsedType;
                 row.split_type = parsedType;
 
-                // 7 & 12. Percentage and Unequal Breakdown Discrepancies
-                if (row.split_details && (row.split_type === 'percentage' || row.split_type === 'unequal' || row.split_type === 'share' || hasConflictingSplit)) {
+                if (row.split_details && !row._allow_conflicting_split) {
+                    const hasValues = row.split_details.includes(':');
+                    const hasPercentages = row.split_details.includes('%');
+                    
+                    let conflict = null;
+                    if (!hasValues) {
+                        if (['percentage', 'unequal', 'share'].includes(parsedType)) {
+                            conflict = { type: 'equal', reason: `Split details do not contain explicit values, but the declared split type is ${parsedType.charAt(0).toUpperCase() + parsedType.slice(1)}.` };
+                        }
+                    } else {
+                        if (parsedType === 'equal') {
+                            conflict = { type: hasPercentages ? 'percentage' : 'share', reason: `Split details contain ${hasPercentages ? 'percentages' : 'explicit values'}, but the declared split type is Equal.` };
+                        } else if (parsedType === 'share' && hasPercentages) {
+                            conflict = { type: 'percentage', reason: 'Split details contain percentages, but the declared split type is Share Ratio.' };
+                        }
+                    }
+
+                    if (conflict) {
+                        parsedRow.needs_resolution = true;
+                        parsedRow.resolution_type = 'conflicting_split';
+                        parsedRow.conflicting_split_metadata = {
+                            declared_split_type: parsedType,
+                            detected_split_type: conflict.type,
+                            reason: conflict.reason
+                        };
+                        return { 
+                            data: parsedRow, 
+                            errors: [], 
+                            warnings: [...warnings, 'Declared split type conflicts with provided split details.'], 
+                            status: 'needs_resolution' 
+                        };
+                    }
+                }
+
+                // 7. Percentage and Unequal Breakdown Discrepancies
+                if (row.split_details && (row.split_type === 'percentage' || row.split_type === 'unequal' || row.split_type === 'share')) {
                     const parts = row.split_details.split(',').map(s => s.split(':'));
                     let totalVal = Big(0);
                     let details = {};
@@ -939,6 +969,21 @@ exports.commitData = async (req, res) => {
                 if (tr.split_type !== undefined) corrections[originalIndex].split_type = tr.split_type;
                 if (tr.amount !== undefined) corrections[originalIndex].amount = tr.amount;
             } else if (tr.action === 'skip') {
+                r.status = 'rejected';
+            }
+        }
+
+        if (d.splitResolution) {
+            const sr = d.splitResolution;
+            if (sr.action === 'keep_declared_type') {
+                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), _allow_conflicting_split: true };
+            } else if (sr.action === 'change_split_type' && sr.newSplitType) {
+                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), split_type: sr.newSplitType, _allow_conflicting_split: true };
+            } else if (sr.action === 'edit_split_details') {
+                corrections[originalIndex] = { ...(corrections[originalIndex] || {}) };
+                if (sr.split_details !== undefined) corrections[originalIndex].split_details = sr.split_details;
+                if (sr.split_type !== undefined) corrections[originalIndex].split_type = sr.split_type;
+            } else if (sr.action === 'skip') {
                 r.status = 'rejected';
             }
         }
