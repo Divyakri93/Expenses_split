@@ -254,6 +254,48 @@ const createRowValidator = (context) => {
                     parsedRow.is_settlement = false;
                 }
 
+                // 6.b Ambiguous Direct Transfer Detection
+                if (!parsedRow.is_settlement && !row._allow_shared_expense) {
+                    const transferKeywords = ['deposit', 'advance', 'transferred', 'transfer', 'paid to', 'sent', 'received', 'reimbursement', 'refunded', 'security deposit', 'rent deposit', 'wallet transfer'];
+                    const hasTransferKeyword = transferKeywords.some(kw => descLower.includes(kw));
+                    
+                    let rawSplitWith = row.split_with ? String(row.split_with).split(';') : [];
+                    if (rawSplitWith.length === 0 && row.split_details) {
+                        const parts = String(row.split_details).split(/[;,]/).filter(Boolean);
+                        parts.forEach(part => {
+                            const match = part.match(/^([^0-9%:]+)/);
+                            if (match) rawSplitWith.push(match[1]);
+                        });
+                    }
+                    rawSplitWith = rawSplitWith.map(s => s.trim()).filter(Boolean);
+                    
+                    const isSingleCounterparty = (rawSplitWith.length === 1);
+                    
+                    if (hasTransferKeyword || isSingleCounterparty) {
+                        let confidence = 0.50;
+                        if (hasTransferKeyword && isSingleCounterparty) confidence = 0.92;
+                        else if (hasTransferKeyword) confidence = 0.75;
+                        else if (isSingleCounterparty) confidence = 0.60;
+                        
+                        parsedRow.needs_resolution = true;
+                        parsedRow.resolution_type = 'direct_transfer';
+                        parsedRow.transfer_metadata = {
+                            confidence: confidence,
+                            original_description: row.description,
+                            payer: parsedRow.paid_by,
+                            recipients: rawSplitWith,
+                            amount: parsedRow.amount,
+                            reason: "Description and participant structure indicate this may be a direct transfer instead of a shared expense."
+                        };
+                        return {
+                            data: parsedRow,
+                            errors: [],
+                            warnings: [...warnings, 'Possible direct transfer detected. Please confirm.'],
+                            status: 'needs_resolution'
+                        };
+                    }
+                }
+
                 // --- NEW SETTLEMENT LOGIC (Rules 1, 5, 6, 8, 9, 10, 11) ---
                 if (parsedRow.is_settlement) {
                     let rawSplitWith = row.split_with ? row.split_with.split(';') : [];
@@ -943,6 +985,24 @@ exports.commitData = async (req, res) => {
             if (resolvedDate) {
                 corrections[originalIndex] = { ...(corrections[originalIndex] || {}), date: resolvedDate };
             } else if (dr.action === 'skip') {
+                r.status = 'rejected';
+            }
+        }
+
+        if (d.transferResolution) {
+            const tr = d.transferResolution;
+            if (tr.action === 'shared_expense') {
+                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), _allow_shared_expense: true };
+            } else if (tr.action === 'direct_transfer') {
+                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), is_settlement: 'true' };
+            } else if (tr.action === 'edit_transaction') {
+                corrections[originalIndex] = { ...(corrections[originalIndex] || {}) };
+                if (tr.description !== undefined) corrections[originalIndex].description = tr.description;
+                if (tr.split_with !== undefined) corrections[originalIndex].split_with = tr.split_with;
+                if (tr.split_details !== undefined) corrections[originalIndex].split_details = tr.split_details;
+                if (tr.split_type !== undefined) corrections[originalIndex].split_type = tr.split_type;
+                if (tr.amount !== undefined) corrections[originalIndex].amount = tr.amount;
+            } else if (tr.action === 'skip') {
                 r.status = 'rejected';
             }
         }
