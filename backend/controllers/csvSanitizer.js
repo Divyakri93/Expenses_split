@@ -614,7 +614,48 @@ const createRowValidator = (context) => {
                     }
                 }
 
-                // 11. Temporal Border Exclusions
+                // 11. Post-Exit Member Billed Detection
+                if (parsedRow.date && parsedRow.split_type !== 'settlement') {
+                    let involved = [];
+                    if (parsedRow.parsed_split_details) {
+                        involved = Object.keys(parsedRow.parsed_split_details);
+                    } else if (normalizedInvolved && normalizedInvolved.length > 0) {
+                        involved = [...normalizedInvolved];
+                    }
+                    
+                    let expDate = new Date(parsedRow.date);
+                    let affected_members = [];
+
+                    involved.forEach(m => {
+                        const d = MOCK_MEMBER_DATES[m];
+                        if (d && d.left_at) {
+                            let leftDate = new Date(d.left_at);
+                            if (expDate > leftDate) {
+                                affected_members.push({
+                                    name: m,
+                                    exit_date: d.left_at
+                                });
+                            }
+                        }
+                    });
+
+                    if (affected_members.length > 0 && !row._allow_post_exit_member) {
+                        parsedRow.needs_resolution = true;
+                        parsedRow.resolution_type = 'post_exit_member';
+                        parsedRow.post_exit_metadata = {
+                            expense_date: parsedRow.date,
+                            affected_members: affected_members
+                        };
+                        return { 
+                            data: parsedRow, 
+                            errors: [], 
+                            warnings: [...warnings, 'One or more participants officially left the group before this expense date.'], 
+                            status: 'needs_resolution' 
+                        };
+                    }
+                }
+
+                // 11b. Temporal Border Exclusions
                 let anomaly = null;
                 if (parsedRow.date) {
                     let involved = [];
@@ -681,7 +722,9 @@ const createRowValidator = (context) => {
                             } else if (joinDate && expenseDate.getMonth() === joinDate.getMonth() && expenseDate.getFullYear() === joinDate.getFullYear()) {
                                 activeDays = (daysInMonth - joinDate.getDate()) + 1;
                             } else if (leftDate && expenseDate > leftDate) {
-                                activeDays = 0; // Explicitly included but completely inactive
+                                if (!row._allow_post_exit_member) {
+                                    activeDays = 0; // Explicitly included but completely inactive
+                                }
                             } else if (joinDate && expenseDate < joinDate) {
                                 activeDays = 0; // Explicitly included but completely inactive
                             }
@@ -900,6 +943,47 @@ exports.commitData = async (req, res) => {
             if (resolvedDate) {
                 corrections[originalIndex] = { ...(corrections[originalIndex] || {}), date: resolvedDate };
             } else if (dr.action === 'skip') {
+                r.status = 'rejected';
+            }
+        }
+
+        if (d.postExitResolution) {
+            const pr = d.postExitResolution;
+            const currentSplitWith = (corrections[originalIndex] && corrections[originalIndex].split_with !== undefined) ? corrections[originalIndex].split_with : (d._raw_csv_row ? d._raw_csv_row.split_with : d.split_with) || '';
+            const currentSplitDetails = (corrections[originalIndex] && corrections[originalIndex].split_details !== undefined) ? corrections[originalIndex].split_details : (d._raw_csv_row ? d._raw_csv_row.split_details : d.split_details) || '';
+
+            if (pr.action === 'keep_member') {
+                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), _allow_post_exit_member: true };
+            } else if (pr.action === 'remove_member' && pr.member) {
+                const memberToRemove = pr.member.toLowerCase();
+                
+                if (currentSplitDetails) {
+                    const parts = currentSplitDetails.split(/[;,]/).filter(Boolean);
+                    const newParts = parts.filter(p => !p.trim().toLowerCase().startsWith(memberToRemove));
+                    corrections[originalIndex] = { ...(corrections[originalIndex] || {}), split_details: newParts.join(';') };
+                } else if (currentSplitWith) {
+                    const parts = currentSplitWith.split(/[;,]/).filter(Boolean);
+                    const newParts = parts.filter(p => p.trim().toLowerCase() !== memberToRemove);
+                    corrections[originalIndex] = { ...(corrections[originalIndex] || {}), split_with: newParts.join(';') };
+                }
+            } else if (pr.action === 'replace_member' && pr.member && pr.new_member) {
+                const oldMem = pr.member.toLowerCase();
+                const newMem = pr.new_member;
+                
+                if (currentSplitDetails) {
+                    const parts = currentSplitDetails.split(/[;,]/).filter(Boolean);
+                    const newParts = parts.map(p => p.trim().toLowerCase().startsWith(oldMem) ? p.replace(new RegExp('^' + oldMem, 'i'), newMem) : p);
+                    corrections[originalIndex] = { ...(corrections[originalIndex] || {}), split_details: newParts.join(';') };
+                } else if (currentSplitWith) {
+                    const parts = currentSplitWith.split(/[;,]/).filter(Boolean);
+                    const newParts = parts.map(p => p.trim().toLowerCase() === oldMem ? newMem : p);
+                    corrections[originalIndex] = { ...(corrections[originalIndex] || {}), split_with: newParts.join(';') };
+                }
+            } else if (pr.action === 'edit_members') {
+                corrections[originalIndex] = { ...(corrections[originalIndex] || {}) };
+                if (pr.split_with !== undefined) corrections[originalIndex].split_with = pr.split_with;
+                if (pr.split_details !== undefined) corrections[originalIndex].split_details = pr.split_details;
+            } else if (pr.action === 'skip') {
                 r.status = 'rejected';
             }
         }
@@ -1227,7 +1311,7 @@ exports.commitData = async (req, res) => {
             const expDate = new Date(exp.date);
             for (let member of splitMembers) {
                 const dates = MOCK_MEMBER_DATES[member];
-                if (dates && dates.left_at && expDate > new Date(dates.left_at)) continue; // Exclude from split!
+                if (dates && dates.left_at && expDate > new Date(dates.left_at) && !d._allow_post_exit_member) continue; // Exclude from split!
                 if (dates && dates.joined_at && expDate < new Date(dates.joined_at)) continue; // Exclude from split!
                 validSplitMembers.push(member);
             }
