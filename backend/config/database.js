@@ -5,15 +5,18 @@ let sequelize;
 
 if (process.env.DATABASE_URL) {
   // Use PostgreSQL in Production/Render
+  const isInternal = process.env.DATABASE_URL.includes('dpg-') && !process.env.DATABASE_URL.includes('.onrender.com');
+  const dialectOptions = isInternal ? {} : {
+      ssl: {
+        require: true,
+        rejectUnauthorized: false
+      }
+  };
+
   sequelize = new Sequelize(process.env.DATABASE_URL, {
     dialect: 'postgres',
     protocol: 'postgres',
-    dialectOptions: {
-      ssl: {
-        require: true,
-        rejectUnauthorized: false // Required by many managed DBs like Render
-      }
-    },
+    dialectOptions,
     logging: false
   });
 } else {
