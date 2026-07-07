@@ -1,199 +1,228 @@
-# FairShare — Intelligent Shared Expense Ledger
+# FairShare CSV Import System
 
-An ultra-modern, full-stack PERN-style application engineered to ingest messy real-world CSV expense files, intercept 12+ categories of structural anomalies, and mathematically resolve complex scenarios like mid-month joiners, multi-currency conversions, name typos, duplicate imports, and guest vs. registered user handling — all with **explicit user approval at every decision point**.
+> A production-grade, zero-auto-correct CSV ingestion engine for expense-sharing ledgers.
 
-> 🔗 GitHub: [github.com/Divyakri93/Expenses_split](https://github.com/Divyakri93/Expenses_split)
-
----
-
-## 🎯 Problem Solved — The 4-Person Flat Scenario
-
-This application was engineered to resolve the exact real-world constraints of a 4-person flat (Aisha, Rohan, Priya, Sam, Meera):
-
-| Person | Demand | How It's Solved |
-|---|---|---|
-| **Aisha** | "One number per person" | **Settlement Matrix** — reduces all group debts into direct P2P payments |
-| **Rohan** | "No magic numbers" | **Audit Trail Ledger** — full double-entry breakdown per transaction |
-| **Priya** | "Dollar is not a rupee" | **Multi-Currency Engine** — USD/EUR/GBP → INR with live exchange rates |
-| **Sam** | "Moved in mid-April" | **Temporal Boundary Engine** — pro-rata split: 23/30 active days = 76.66% max share |
-| **Meera** | "Approve anything changed" | **Interactive Wizard** — zero silent mutations, every anomaly requires user approval |
+![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
+![Status](https://img.shields.io/badge/status-production-success.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 ---
 
-## ✨ Key Features
+## 📖 Project Overview
 
-### 📥 CSV Import Wizard
-- Drag-and-drop CSV upload with real-time anomaly detection
-- Every problematic row is presented in an **interactive step-by-step wizard**
-- User can **accept**, **reject**, or **manually edit** every single row
-- Nothing is committed to the database without explicit user approval
+Importing human-generated financial CSV files into a structured relational database is an incredibly fragile process. A single ambiguous date format, a misspelled name, or a floating-point rounding error can silently corrupt a ledger and permanently destroy user trust.
 
-### 🔍 Duplicate Detection System (O(n) performance)
-- **Batch duplicates**: O(1) hash map lookup by `date + amount + payer + currency`
-- **Database duplicates**: pre-scans existing DB expenses before import
-- **Confidence scoring**: 100% (exact match), 90% (description typo), 70% (date ±1 day)
-- **Split member comparison**: Pizza/Aisha/Rohan ≠ Pizza/Aisha/Priya — different expenses
-- **Currency-aware**: $10 ≠ ₹10 even if digits match
-- **Normalized descriptions**: "Pizza!!!" = "pizza" = "PIZZA" before comparison (Levenshtein)
+This project solves that problem by implementing a strict **"Zero-Auto-Correct"** architecture. 
 
-### 🔤 Typo Correction — "Did you mean?" Flow
-- Backend runs **Levenshtein distance ≤ 2** against all registered users
-- If close match found, frontend shows an interactive popup:
-  - ✅ **Yes, it's Aisha** — remap to existing user, no duplicate created
-  - 👤 **Keep as Guest "Aishaa"** — create a Guest profile with original spelling
-  - 🆕 **Create new User "Aishaa"** — register brand new account
-- Typo names and unknown names handled separately (no false positives)
+Unlike ordinary CRUD applications that try to silently guess or auto-fix dirty data (which leads to financial imbalances), this engine halts on any anomaly. It flags the ambiguity, securely holds the batch in memory, and utilizes an interactive `needs_resolution` workflow to guarantee that human intent always governs the math.
 
-### 👥 Guest Entity System
-- Guests are **separate from Users** — they are not auto-promoted to User accounts
-- `Guest` model stores: `name`, `email`, `phone`, `notes`, `user_id` (nullable)
-- `Guest.findOrCreate()` prevents duplicate guest profiles across imports
-- Guest → User conversion: `convertGuestToUser()` links without deleting history
-- Settlements and audit trails roll up guest balances into linked user balance if promoted
-
-### 📊 Anomaly Detection Engine (16 Categories)
-See `SCOPE.md` for full technical specifications. Summary:
-
-| # | Code Line | Anomaly | Resolution |
-|---|---|---|---|
-| 1 | 192 | **Missing Description** | Block row — error until user fills it |
-| 2 | 194 | **Missing Payer (paid_by)** | Block row — error until user selects payer |
-| 3 | 196 | **Missing Amount** | Block row immediately — no further processing |
-| 4 | 259 | **Name Typo / Fuzzy Match** | Levenshtein ≤ 2 → "Did you mean?" popup (3-way choice) |
-| 5 | 254 | **Unknown Participant** | No exact or fuzzy match → marked as unknown, user resolves |
-| 6 | 267 | **Comma-Formatted Numbers (1,500)** | Strip non-numeric chars → `Big.js` parse |
-| 7 | 278 | **Negative Amount (Refund)** | `is_refund: true` — payer credited, splits debited |
-| 8 | 285 | **Settlement Logged as Expense** | `is_settlement: true` — routed to P2P debt engine |
-| 9 | 294 | **Non-Standard Date Formats** | Multi-format parse → ISO 8601 `YYYY-MM-DD` |
-| 10 | 321 | **Missing Currency** | Error flagged — defaults to group base currency (INR) |
-| 11 | 326 | **Multi-Currency / FX Conversion** | Non-INR → base_amount computed with exchange rate |
-| 12 | 340 | **Conflicting Split Definitions** | Both `split_type=equal` AND `split_details` present → blocked |
-| 13 | 347 | **Percentage Splits ≠ 100%** | Auto-normalize: Wᵢ = pᵢ / Σp |
-| 14 | 404 | **Batch Duplicate (within CSV)** | O(1) hash map + confidence score + split member Set comparison |
-| 15 | 429 | **Database Duplicate (already imported)** | DB pre-scan at parse start + pre-insert `findOne` check |
-| 16 | 466 | **Temporal Frontier Violation** | `POST_EXIT_MEMBER_BILLED` + `MID_MONTH_JOINER` pro-rata engine |
-
-### ⏱️ Temporal Boundary Engine
-- Dynamically detects `MID_MONTH_JOINER` and `POST_EXIT_MEMBER_BILLED` anomalies
-- Calculates exact active days per billing month per member
-- Sam (joined Apr 8): `23/30 ≈ 76.66%` max liability
-- Meera (left Mar 31): `0/30 = 0%` for April expenses
-- Remainder redistributed to full-time members automatically
-
-### 💱 Multi-Currency Engine
-- Supports: USD, EUR, GBP, SGD, AUD, AED, CAD, INR
-- Frontend currency editor with real-time INR conversion preview
-- Stores both original amount + converted base amount for full audit trail
-
-### 📈 Settlement & Audit
-- **Settlement Matrix**: Greedy debt minimization — optimal P2P payment graph
-- **Audit Trail**: Double-entry breakdown, every balance traceable to source transactions
-- **CSV Changes Log**: Inline system notes, corrections, and duplicate warnings persisted in expense notes
+**Core Focus:**
+* **Accuracy:** No financial values or participant identities are ever guessed.
+* **Financial Integrity:** Zero-sum allocations are strictly enforced.
+* **Precision:** `Big.js` is used exclusively to eliminate floating-point drift.
+* **Transaction Safety:** 100% atomic database commits via Sequelize Managed Transactions.
 
 ---
 
-## ⚙️ Tech Stack
+## ⚡ Key Features
 
-| Layer | Technology |
-|---|---|
-| **Backend** | Node.js, Express.js |
-| **Database** | SQLite (local dev) / PostgreSQL (production) |
-| **ORM** | Sequelize (auto-sync with `alter: true`) |
-| **CSV Parsing** | fast-csv (stream-based) |
-| **Precision Math** | big.js (Banker's Rounding) |
-| **Date Handling** | date-fns (strict UTC parsing) |
-| **Frontend** | React 18, Vite |
-| **Styling** | Tailwind CSS, Glassmorphism |
-| **Auth** | JWT (Bearer token) |
-| **Icons** | Lucide React |
+| Feature | Description |
+| :--- | :--- |
+| **Interactive Anomaly Engine** | Detects structural conflicts and halts for user review instead of failing silently. |
+| **Big.js Mathematical Precision** | Calculates exact fractional splits without `0.1 + 0.2` rounding drift. |
+| **Atomic Commits** | Entire CSV batches are committed in a single transaction. Partial imports are impossible. |
+| **Duplicate Detection** | O(n) hash-map detection matching dates, amounts, and participants. |
+| **Guest Profile Generation** | Securely maps unregistered individuals to shadow profiles to absorb debt safely. |
+| **Temporal Pro-Rata Math** | Dynamically scales debt fractions for Mid-Month Joiners. |
+| **Multi-Split Validations** | Natively calculates Equal, Percentage, Share Ratio, and Unequal distributions. |
+| **P2P Settlement Detection** | Isolates direct repayments from shared group expenses. |
 
 ---
 
-## 🚀 Setup & Running Locally
+## 🏛️ Project Architecture
 
-### 1. Clone the Repository
-```bash
-git clone https://github.com/Divyakri93/Expenses_split.git
-cd Expenses_split
+```mermaid
+graph TD
+    A[Raw CSV Uploaded] --> B[CSV Parser]
+    B --> C[Validation Engine]
+    C --> D{Anomaly Detected?}
+    D -- Yes --> E[Mark needs_resolution]
+    E --> F[Frontend Review Wizard]
+    F --> G[User Submits Decision]
+    G --> H[Mutate Raw Payload]
+    H --> C
+    D -- No --> I[Stage in Memory]
+    I --> J[Sequelize Transaction Started]
+    J --> K[Insert Expenses]
+    K --> L[Insert ExpenseSplits]
+    L --> M[Commit Transaction]
 ```
 
-### 2. Backend Setup
+---
+
+## 🔍 Supported Anomalies
+
+The validation engine actively detects and halts on the following real-world ambiguities:
+
+| Anomaly | Detection Logic | Resolution Action |
+| :--- | :--- | :--- |
+| **Name Typo** | Levenshtein distance ≤ 2 against known users. | User maps to UUID or creates Guest. |
+| **Guest Member** | Unregistered string detected in split. | Creates shadow profile via `findOrCreate`. |
+| **Conflicting Duplicate** | Intra-CSV match found. | User explicitly chooses to Skip or Keep. |
+| **Missing Currency** | Blank ISO string. | User inputs valid ISO code. |
+| **Ambiguous Date** | `DD-MM` vs `MM-DD` clash (e.g., `04-05`). | User confirms the exact month. |
+| **Negative Amount / Refund** | `< 0` float detected. | Flips to positive absolute, flags `is_refund`. |
+| **Direct Transfer** | Counterparty = 1 + Settlement Keyword. | Bypasses splits; flags `is_settlement`. |
+| **Mid-Month Joiner** | `joined_at` overlaps expense `date`. | Natively calculates fractional days. |
+| **Post-Exit Member Billed**| `left_at` occurs prior to expense `date`. | User opts to Keep or Remove member. |
+| **Conflicting Split** | `Equal` declared, but `%` characters detected. | User changes split type definition. |
+
+---
+
+## 💻 Technology Stack
+
+| Category | Technology Used |
+| :--- | :--- |
+| **Backend** | Node.js, Express.js |
+| **Database** | PostgreSQL / MySQL |
+| **ORM & Transactions** | Sequelize |
+| **Math & Precision** | `Big.js` |
+| **Date Parsing** | `date-fns` |
+| **CSV Parsing** | `csv-parser` / `papaparse` |
+| **Version Control** | Git, GitHub |
+
+---
+
+## 📁 Folder Structure
+
+```text
+/backend
+├── /controllers
+│   └── csvSanitizer.js     # Core engine (Parser, Validator, Interceptor, Committer)
+├── /models
+│   ├── Expense.js          # Core transaction ledger (DECIMAL 12,4)
+│   ├── ExpenseSplit.js     # Granular debt allocations
+│   ├── User.js             # Registered entities
+│   ├── Guest.js            # Shadow entities
+│   └── GroupMember.js      # Temporal boundaries (joined_at, left_at)
+├── /config
+│   └── database.js         # Sequelize initialization
+└── /routes
+    └── csvRoutes.js        # API endpoints
+```
+
+---
+
+## 🚀 Installation Guide
+
+**1. Clone Repository**
 ```bash
-cd backend
+git clone https://github.com/[your-username]/Expenses_split.git
+cd Expenses_split/backend
+```
+
+**2. Install Dependencies**
+```bash
 npm install
 ```
 
-Create a `.env` file in the `backend/` directory:
+**3. Environment Variables**
+Create a `.env` file in the backend root:
 ```env
 PORT=5000
-JWT_SECRET=your_super_secret_jwt_key
-# For PostgreSQL (production):
-# DATABASE_URL=postgres://postgres:yourpassword@localhost:5432/expenses_db
-# Leave DATABASE_URL blank for SQLite local dev
+DATABASE_URL=postgres://user:password@localhost:5432/fairshare
 ```
 
+**4. Database Setup**
+Ensure your local relational database is running, then sync the models:
 ```bash
-node server.js
-# Output: Database synced | Server running on port 5000
+# Handled via Sequelize sync() on startup in dev environments
 ```
 
-### 3. Frontend Setup
+**5. Run Backend**
 ```bash
-cd frontend
-npm install
 npm run dev
-# Vite dev server: http://localhost:5173
-```
-
-### 4. Test the CSV Import
-1. Sign up / Login at `http://localhost:5173`
-2. Navigate to **CSV Import Wizard**
-3. Upload a CSV with columns: `description, amount, paid_by, date, split_with, currency`
-4. Interact with the anomaly wizard
-5. Resolve any "Did you mean?" typo popups, duplicate warnings, and unknown members
-6. Click **Commit Valid Rows**
-
-### Sample CSV Format
-```csv
-description,amount,paid_by,date,split_with,currency,split_type
-Pizza,500,Aisha,2026-07-01,Aisha;Rohan;Priya,INR,equal
-Airbnb,3400,Rohan,2026-06-15,Aisha;Rohan;Priya;Sam,INR,equal
-Coffee,$12,Priya,2026-07-02,Priya;Aisha,USD,equal
+# or
+node server.js
 ```
 
 ---
 
-## 🗂️ Project Structure
+## ⚙️ Environment Variables
 
-```
-Expenses_App/
-├── backend/
-│   ├── controllers/
-│   │   ├── csvSanitizer.js      ← Core: all anomaly detection, duplicate logic, typo correction
-│   │   ├── authController.js    ← Auth + Guest→User conversion
-│   │   └── settlementController.js ← Settlement matrix + audit trail
-│   ├── models/
-│   │   ├── User.js
-│   │   ├── Guest.js             ← Guest entity (email, phone, notes, user_id FK)
-│   │   ├── Expense.js
-│   │   ├── ExpenseSplit.js
-│   │   ├── Group.js
-│   │   ├── GroupMember.js
-│   │   └── index.js             ← Sequelize associations
-│   └── server.js
-├── frontend/
-│   └── src/components/
-│       ├── CSVProcessingWizard.jsx  ← Main wizard UI + "Did you mean?" popup
-│       ├── CorrectionSummary.jsx   ← Final review before commit
-│       ├── AuditTrailView.jsx
-│       └── GroupDashboard.jsx
-├── README.md         ← This file
-├── SCOPE.md          ← Full anomaly specs + DB schema
-├── DECISIONS.md      ← Engineering decisions & trade-offs
-├── IMPORT_REPORT.md  ← Sample import execution report
-└── AI_USAGE.md       ← AI collaboration log & bug fixes
-```
+| Variable | Description |
+| :--- | :--- |
+| `PORT` | The port the Express server binds to (default: `5000`). |
+| `DATABASE_URL` | The connection string for the relational database (PostgreSQL/MySQL). |
 
 ---
 
-*See `DECISIONS.md` for architecture trade-offs, `SCOPE.md` for full anomaly specs, and `AI_USAGE.md` for AI collaboration transparency.*
+## 🤖 AI Usage
+
+Artificial Intelligence (LLMs) was utilized strictly as an **interactive engineering assistant**, not as an autonomous code generator. 
+
+The AI was used to:
+* Review the Big.js integration to ensure pennies weren't leaking.
+* Discuss the structural trade-offs of isolated Guest tables versus generic polymorphic associations.
+* Generate markdown formatting for reporting tables.
+
+The AI was **never** allowed to make final architectural decisions, and its tendency to suggest "auto-correct" solutions was explicitly overridden in favor of strict data-integrity checks. 
+
+👉 **Read the full retrospective here:** [AI_USAGE.md](./AI_USAGE.md)
+
+---
+
+## 🧠 Engineering Decisions
+
+Building a financial ledger requires strict boundaries. Key decisions include:
+* **Why Big.js?** Native JavaScript floating-point arithmetic breaks zero-sum constraints (`0.1 + 0.2`).
+* **Why Transactions?** If row 499 of a 500-row CSV fails a database constraint, rows 1-498 are rolled back instantaneously to prevent partial batch corruption.
+* **Why `needs_resolution`?** We deliberately sacrificed "1-click" UX convenience in order to guarantee absolute financial accuracy.
+
+👉 **Read the full ADR log here:** [DECISIONS.md](./DECISIONS.md)
+
+---
+
+## 📚 Documentation Directory
+
+This repository is maintained to enterprise standards. Please review the following internal engineering documents:
+
+| Document | Purpose |
+| :--- | :--- |
+| [README.md](./README.md) | Project entry point, setup, and overview. |
+| [SCOPE.md](./SCOPE.md) | Product definitions, constraints, and anomaly rules. |
+| [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) | Exhaustive ERD, indexes, and precision definitions. |
+| [DECISIONS.md](./DECISIONS.md) | Architecture Decision Record (ADR) detailing major trade-offs. |
+| [AI_USAGE.md](./AI_USAGE.md) | Report on the responsible pair-programming use of AI. |
+| [IMPORT_REPORT.md](./IMPORT_REPORT.md) | Auto-generated batch processing report format. |
+
+---
+
+## 🚧 Challenges Faced
+
+1. **Fractional Pennies (Precision Imbalance):** Dividing a $10 bill among 3 people mathematically yields an orphaned penny. Solved by bypassing standard arithmetic for the *last participant* in a split array, forcing them to absorb `Total Amount - Sum(Previous Allocations)`, guaranteeing absolute zero-sum equilibrium.
+2. **Temporal Boundaries:** Allocating expenses for Mid-Month joiners required highly complex date-math isolation to determine strict fractional liability without polluting full-time members' debt.
+
+---
+
+## 🔮 Future Improvements
+
+* **Exchange Rate API Integration:** Automatically fetch historical FX rates (via Fixer.io) at import time rather than requiring manual user entry.
+* **Import History & Undo:** Creating an `import_batches` table to allow users to instantly rollback an entire CSV import via the UI.
+* **Machine Learning Deduplication:** Upgrading from strict hash-mapping to lightweight text embedding to catch semantically identical but structurally different entries (e.g., `Uber Ride` vs `Uber Trip`).
+
+---
+
+## 🤝 Contributing
+
+This is a portfolio demonstration project. While PRs are welcome, the architecture is currently locked to demonstrate specific backend constraints. Please open an issue to discuss structural changes before submitting code.
+
+---
+
+## 📫 Contact
+
+**[Your Name]**  
+*Senior Backend Engineer*  
+Email: `[Your Email]`  
+LinkedIn: `[Your LinkedIn Profile]`  
+GitHub: `[Your GitHub Profile]`
