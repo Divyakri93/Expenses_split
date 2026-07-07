@@ -223,6 +223,6 @@ This is a portfolio demonstration project. While PRs are welcome, the architectu
 
 **Divya Kumari**  
 *Student at Lovely Professional University*  
-Email: `[divyakumari99055@gmail.com]`  
-LinkedIn: `[www.linkedin.com/in/divya-kumari93]`  
-GitHub: `[https://github.com/Divyakri93]`
+Email: `divyakumari99055@gmail.com`  
+LinkedIn: `www.linkedin.com/in/divya-kumari93`  
+GitHub: `https://github.com/Divyakri93`
