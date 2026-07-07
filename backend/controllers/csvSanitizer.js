@@ -844,7 +844,16 @@ exports.processCSV = async (req, res) => {
 
     const stream = Readable.from(req.file.buffer);
 
-    csv.parseStream(stream, { headers: true })
+    const isTsv = req.file.originalname.endsWith('.tsv') || (req.file.buffer.toString('utf8', 0, 1000).includes('\t') && !req.file.buffer.toString('utf8', 0, 1000).includes(','));
+    const delimiter = isTsv ? '\t' : ',';
+
+    csv.parseStream(stream, { headers: true, ignoreEmpty: true, delimiter })
+        .on('error', (error) => {
+            console.error('CSV Parsing Error:', error);
+            if (!res.headersSent) {
+                res.status(400).json({ error: 'Invalid CSV format. Please ensure the file is a properly formatted CSV or TSV.' });
+            }
+        })
         .on('data', (row) => results.push(row))
         .on('end', async () => {
             // Fetch all registered users in the database to check against

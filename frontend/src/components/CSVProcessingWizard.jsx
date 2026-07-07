@@ -189,28 +189,9 @@ const CSVProcessingWizard = () => {
       setProcessedRows(res.data.rows);
       if(res.data.rows.length > 0) setActiveRowIndex(0);
     } catch (err) {
-      console.error('Upload failed', err);
-      // Fallback Demo Data if Backend isn't fully running yet
-      setProcessedRows([
-        {
-          status: 'warning',
-          data: { original_index: 0, description: 'Dinner at Marina Bites', amount: 1200, paid_by: 'Aisha', date: '2026-02-08', split_type: 'equal' },
-          warnings: ['Possible duplicate of row 5'],
-          errors: []
-        },
-        {
-          status: 'error',
-          data: { original_index: 1, description: 'Groceries', amount: null, paid_by: null, date: '2026-02-10' },
-          warnings: [],
-          errors: ['Missing paid_by', 'Invalid amount format']
-        },
-        {
-          status: 'ok',
-          data: { original_index: 2, description: 'Uber', base_amount: 350, amount: 350, paid_by: 'Rohan', date: '2026-02-11', split_type: 'equal' },
-          warnings: [],
-          errors: []
-        }
-      ]);
+      console.error(err);
+      const errMsg = err.response?.data?.error || 'Failed to upload CSV. Ensure the backend is running.';
+      alert(errMsg);
     } finally {
       setUploading(false);
     }
