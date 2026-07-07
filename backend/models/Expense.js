@@ -17,23 +17,7 @@ const Expense = sequelize.define('Expense', {
   },
   paid_by_user_id: {
     type: DataTypes.UUID,
-    allowNull: true,
-  },
-  paid_by_guest_id: {
-    type: DataTypes.UUID,
-    allowNull: true,
-  },
-  settled_to_user_id: {
-    type: DataTypes.UUID,
-    allowNull: true,
-  },
-  settled_to_guest_id: {
-    type: DataTypes.UUID,
-    allowNull: true,
-  },
-  original_amount: {
-    type: DataTypes.DECIMAL(12, 4),
-    allowNull: true,
+    allowNull: false,
   },
   amount: {
     type: DataTypes.DECIMAL(12, 4),
@@ -43,22 +27,10 @@ const Expense = sequelize.define('Expense', {
     type: DataTypes.STRING(3),
     allowNull: false,
   },
-  base_currency: {
-    type: DataTypes.STRING(3),
-    defaultValue: 'INR',
-  },
   exchange_rate_to_base: {
     type: DataTypes.DECIMAL(12, 6),
     allowNull: false,
     defaultValue: 1.0,
-  },
-  conversion_timestamp: {
-    type: DataTypes.DATE,
-    allowNull: true,
-  },
-  exchange_rate_source: {
-    type: DataTypes.STRING,
-    allowNull: true,
   },
   split_type: {
     type: DataTypes.ENUM('equal', 'unequal', 'percentage', 'share'),
@@ -73,10 +45,6 @@ const Expense = sequelize.define('Expense', {
     type: DataTypes.TEXT,
   },
   is_settlement: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: false,
-  },
-  is_refund: {
     type: DataTypes.BOOLEAN,
     defaultValue: false,
   },

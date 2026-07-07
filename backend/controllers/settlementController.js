@@ -1,4 +1,4 @@
-const { User, Expense, ExpenseSplit, Guest } = require('../models');
+const { User, Expense, ExpenseSplit } = require('../models');
 const Big = require('big.js');
 Big.RM = 2; // Banker's Rounding (Half-Even)
 
@@ -6,52 +6,42 @@ exports.calculateSettlements = async (req, res) => {
     try {
         const { groupId } = req.params;
 
-        // 1. Fetch all guests for this group to resolve Guest -> User link promotions
-        const guests = await Guest.findAll({ where: { group_id: groupId } });
-        const guestToUserMap = {};
-        guests.forEach(g => {
-            if (g.user_id) {
-                guestToUserMap[g.id] = g.user_id;
-            }
-        });
-
-        const getTargetId = (userId, guestId) => {
-            if (userId) return `user_${userId}`;
-            if (guestId) {
-                if (guestToUserMap[guestId]) {
-                    return `user_${guestToUserMap[guestId]}`;
-                }
-                return `guest_${guestId}`;
-            }
-            return 'unknown';
-        };
-
-        // 2. Fetch all expenses for this group
+        // 1. Fetch all expenses for this group
         const expenses = await Expense.findAll({
             where: { group_id: groupId, status: 'active' },
             include: [{ model: ExpenseSplit }]
         });
 
-        const balances = {}; // { prefixedId: netBalance (Big.js) }
+        const balances = {}; // { userId: netBalance (Big.js) }
 
         expenses.forEach(exp => {
-            const payerId = getTargetId(exp.paid_by_user_id, exp.paid_by_guest_id);
+            const payerId = exp.paid_by_user_id;
             
             if (!balances[payerId]) balances[payerId] = Big(0);
 
-            balances[payerId] = balances[payerId].plus(exp.amount);
+            // Add the total amount to payer's credit (if not a settlement)
+            // If it's a settlement, the payer is paying back a debt, so they get credited
+            if (exp.is_settlement) {
+               balances[payerId] = balances[payerId].plus(exp.amount);
+            } else {
+               balances[payerId] = balances[payerId].plus(exp.amount);
+            }
 
             let totalSplitAmount = Big(0);
 
             // Deduct from participants
             exp.ExpenseSplits.forEach(split => {
-                const pId = getTargetId(split.user_id, split.guest_id);
+                const pId = split.user_id;
                 if (!balances[pId]) balances[pId] = Big(0);
                 
                 const share = Big(split.calculated_share_amount);
                 totalSplitAmount = totalSplitAmount.plus(share);
 
-                balances[pId] = balances[pId].minus(share);
+                if (exp.is_settlement) {
+                    balances[pId] = balances[pId].minus(share);
+                } else {
+                    balances[pId] = balances[pId].minus(share);
+                }
             });
 
             // Handle mathematically unallocated debt (due to missing splits or rounding errors)
@@ -65,12 +55,12 @@ exports.calculateSettlements = async (req, res) => {
         const debtors = [];
         const creditors = [];
 
-        Object.keys(balances).forEach(id => {
-            const val = balances[id];
+        Object.keys(balances).forEach(userId => {
+            const val = balances[userId];
             if (val.lt(0)) {
-                debtors.push({ id, amount: val.abs() });
+                debtors.push({ userId, amount: val.abs() });
             } else if (val.gt(0)) {
-                creditors.push({ id, amount: val });
+                creditors.push({ userId, amount: val });
             }
         });
 
@@ -90,8 +80,8 @@ exports.calculateSettlements = async (req, res) => {
             const minAmount = debtor.amount.lt(creditor.amount) ? debtor.amount : creditor.amount;
 
             settlements.push({
-                from: debtor.id,
-                to: creditor.id,
+                from: debtor.userId,
+                to: creditor.userId,
                 amount: minAmount.round(4).toNumber()
             });
 
@@ -102,17 +92,14 @@ exports.calculateSettlements = async (req, res) => {
             if (creditor.amount.eq(0)) c++;
         }
 
-        // Map User and Guest IDs to Names for UI
+        // Map User IDs to Names for UI
         const users = await User.findAll();
-        const nameMap = {};
-        users.forEach(u => nameMap[`user_${u.id}`] = u.name);
-        guests.forEach(g => {
-            nameMap[`guest_${g.id}`] = g.name;
-        });
+        const userMap = {};
+        users.forEach(u => userMap[u.id] = u.name);
 
         const namedSettlements = settlements.map(s => ({
-            fromName: nameMap[s.from] || 'Unknown',
-            toName: nameMap[s.to] || 'Unknown',
+            fromName: userMap[s.from] || 'Unknown',
+            toName: userMap[s.to] || 'Unknown',
             amount: s.amount
         }));
 
@@ -126,31 +113,15 @@ exports.calculateSettlements = async (req, res) => {
 exports.getAuditTrail = async (req, res) => {
     try {
         const { userId } = req.params;
-        const { Op } = require('sequelize');
 
-        // Fetch any Guest profiles linked to this User ID
-        const linkedGuests = await Guest.findAll({ where: { user_id: userId } });
-        const linkedGuestIds = linkedGuests.map(g => g.id);
-
-        // Fetch all expenses where user is payer OR any of their linked guests is payer
+        // Fetch all expenses where user is payer OR participant
         const paidExpenses = await Expense.findAll({
-            where: {
-                [Op.or]: [
-                    { paid_by_user_id: userId },
-                    { paid_by_guest_id: { [Op.in]: linkedGuestIds } }
-                ],
-                status: 'active'
-            },
+            where: { paid_by_user_id: userId, status: 'active' },
             include: [{ model: ExpenseSplit }]
         });
 
         const splitExpenses = await ExpenseSplit.findAll({
-            where: {
-                [Op.or]: [
-                    { user_id: userId },
-                    { guest_id: { [Op.in]: linkedGuestIds } }
-                ]
-            },
+            where: { user_id: userId },
             include: [{ model: Expense }]
         });
 

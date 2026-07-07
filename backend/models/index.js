@@ -5,7 +5,6 @@ const GroupMember = require('./GroupMember');
 const Expense = require('./Expense');
 const ExpenseSplit = require('./ExpenseSplit');
 const Message = require('./Message');
-const Guest = require('./Guest');
 
 // User <-> Group (Many-to-Many via GroupMember)
 User.belongsToMany(Group, { through: GroupMember, foreignKey: 'user_id', onDelete: 'CASCADE' });
@@ -19,10 +18,6 @@ Expense.belongsTo(Group, { foreignKey: 'group_id', onDelete: 'CASCADE' });
 User.hasMany(Expense, { foreignKey: 'paid_by_user_id', onDelete: 'RESTRICT' });
 Expense.belongsTo(User, { as: 'Payer', foreignKey: 'paid_by_user_id', onDelete: 'RESTRICT' });
 
-// Guest -> Expense (Payer)
-Guest.hasMany(Expense, { foreignKey: 'paid_by_guest_id', onDelete: 'RESTRICT' });
-Expense.belongsTo(Guest, { as: 'GuestPayer', foreignKey: 'paid_by_guest_id', onDelete: 'RESTRICT' });
-
 // Expense -> ExpenseSplit
 Expense.hasMany(ExpenseSplit, { foreignKey: 'expense_id', onDelete: 'CASCADE' });
 ExpenseSplit.belongsTo(Expense, { foreignKey: 'expense_id', onDelete: 'CASCADE' });
@@ -30,18 +25,6 @@ ExpenseSplit.belongsTo(Expense, { foreignKey: 'expense_id', onDelete: 'CASCADE' 
 // User -> ExpenseSplit
 User.hasMany(ExpenseSplit, { foreignKey: 'user_id', onDelete: 'CASCADE' });
 ExpenseSplit.belongsTo(User, { as: 'Participant', foreignKey: 'user_id', onDelete: 'CASCADE' });
-
-// Guest -> ExpenseSplit
-Guest.hasMany(ExpenseSplit, { foreignKey: 'guest_id', onDelete: 'CASCADE' });
-ExpenseSplit.belongsTo(Guest, { as: 'GuestParticipant', foreignKey: 'guest_id', onDelete: 'CASCADE' });
-
-// Guest <-> Group
-Guest.belongsTo(Group, { foreignKey: 'group_id', onDelete: 'CASCADE' });
-Group.hasMany(Guest, { foreignKey: 'group_id', onDelete: 'CASCADE' });
-
-// Guest <-> User linking
-Guest.belongsTo(User, { foreignKey: 'user_id', as: 'LinkedUser', onDelete: 'SET NULL' });
-User.hasOne(Guest, { foreignKey: 'user_id', as: 'GuestProfile', onDelete: 'SET NULL' });
 
 // Group -> Message
 Group.hasMany(Message, { foreignKey: 'group_id', onDelete: 'CASCADE' });
@@ -59,5 +42,4 @@ module.exports = {
   Expense,
   ExpenseSplit,
   Message,
-  Guest,
 };

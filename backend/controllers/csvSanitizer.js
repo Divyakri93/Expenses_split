@@ -2,1201 +2,419 @@ const csv = require('fast-csv');
 const { Readable } = require('stream');
 const Big = require('big.js');
 Big.RM = 2; // Banker's Rounding (Half-Even)
-const { parse, isValid, parseISO, format } = require('date-fns');
-const { sequelize, Expense, ExpenseSplit, User, GroupMember, Guest } = require('../models');
+const { parse, isValid, parseISO } = require('date-fns');
+const { sequelize, Expense, ExpenseSplit, User, GroupMember } = require('../models');
 
 // Mock data to simulate DB state during parse for speed, in production this is fetched per group.
 const EXCHANGE_RATES = {
-    'USD': 95.11,
-    'EUR': 102.50,
-    'GBP': 120.00,
-    'SGD': 70.00,
-    'AUD': 62.00,
-    'AED': 25.90,
-    'CAD': 69.50
+  'USD': 95.11,
+  'EUR': 102.50,
+  'GBP': 120.00,
+  'SGD': 70.00,
+  'AUD': 62.00,
+  'AED': 25.90,
+  'CAD': 69.50
 };
 
-const ACTIVE_MEMBERS = ['aisha', 'rohan', 'priya', 'sam', 'meera'];
+const ACTIVE_MEMBERS = ['aisha', 'rohan', 'priya', 'sam', 'meera']; 
 const MOCK_MEMBER_DATES = {
-    'meera': { joined_at: '2026-01-01', left_at: '2026-03-31' },
-    'sam': { joined_at: '2026-04-08', left_at: null }
+  'meera': { joined_at: '2026-01-01', left_at: '2026-03-31' },
+  'sam': { joined_at: '2026-04-08', left_at: null }
 };
 
 // Helper: Levenshtein distance for fuzzy matching
 const levenshtein = (a, b) => {
-    if (a.length === 0) return b.length;
-    if (b.length === 0) return a.length;
-    const matrix = Array(a.length + 1).fill(null).map(() => Array(b.length + 1).fill(null));
-    for (let i = 0; i <= a.length; i += 1) matrix[i][0] = i;
-    for (let j = 0; j <= b.length; j += 1) matrix[0][j] = j;
-    for (let i = 1; i <= a.length; i += 1) {
-        for (let j = 1; j <= b.length; j += 1) {
-            const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
-            matrix[i][j] = Math.min(
-                matrix[i][j - 1] + 1,
-                matrix[i - 1][j] + 1,
-                matrix[i - 1][j - 1] + indicator
-            );
-        }
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const matrix = Array(a.length + 1).fill(null).map(() => Array(b.length + 1).fill(null));
+  for (let i = 0; i <= a.length; i += 1) matrix[i][0] = i;
+  for (let j = 0; j <= b.length; j += 1) matrix[0][j] = j;
+  for (let i = 1; i <= a.length; i += 1) {
+    for (let j = 1; j <= b.length; j += 1) {
+      const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j] + 1,
+        matrix[i - 1][j - 1] + indicator
+      );
     }
-    return matrix[a.length][b.length];
+  }
+  return matrix[a.length][b.length];
 };
 
-// Helper: Normalize description for comparison
-const normalizeDescription = (desc) => {
-    if (!desc) return '';
-    return desc.trim().toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ');
-};
-
-// Helper: Calculate duplicate confidence score (0 = not a duplicate, 70/90/100 = confidence levels)
-const calculateConfidence = (a, b) => {
-    if (!a || !b) return 0;
-    // Amount + currency must match exactly — if not, not a duplicate at all
-    const currA = (a.currency || 'INR').toLowerCase();
-    const currB = (b.currency || 'INR').toLowerCase();
-    if (Number(a.amount) !== Number(b.amount) || currA !== currB) return 0;
-    // Payer must match exactly
-    const payerA = (a.paid_by || '').trim().toLowerCase();
-    const payerB = (b.paid_by || '').trim().toLowerCase();
-    if (payerA !== payerB) return 0;
-    // Date comparison
-    const d1 = new Date(a.date);
-    const d2 = new Date(b.date);
-    const diffDays = Math.abs(Math.round((d1 - d2) / (1000 * 60 * 60 * 24)));
-    if (diffDays > 1) return 0; // date differs by more than 1 day — not a duplicate
-    // Description comparison (normalized)
-    const descA = normalizeDescription(a.description);
-    const descB = normalizeDescription(b.description);
-    const maxLen = Math.max(descA.length, descB.length);
-    const dist = levenshtein(descA, descB);
-    const descSimilarity = maxLen === 0 ? 100 : Math.round((1 - dist / maxLen) * 100);
-    // Score rules
-    if (diffDays === 0 && descSimilarity === 100) return 100; // Exact match
-    if (diffDays === 0 && descSimilarity >= 80) return 90;   // Description typo only
-    if (diffDays === 1) return 70;                            // Date differs by 1 day
-    return 0;
-};
-
-
-
-const createRowValidator = (context) => {
-    const { ACTIVE_MEMBERS, dbUserNames, EXCHANGE_RATES, MOCK_MEMBER_DATES, dbMap, processedMap, getPrefixedId, levenshtein, userByNameMap, guestByNameMap } = context;
-    
-    const getCaseInsensitiveMatch = (name, list) => {
-                if (!name) return null;
-                const lowercase = name.trim().toLowerCase();
-                return list.find(item => item.toLowerCase() === lowercase);
-            };
-
-            const checkKnownMember = (name) => {
-                if (!name) return null;
-                const cleanName = name.trim();
-
-                // 1. Check exact/case-insensitive match in ACTIVE_MEMBERS
-                const activeMatch = getCaseInsensitiveMatch(cleanName, ACTIVE_MEMBERS);
-                if (activeMatch) return activeMatch;
-
-                // 2. Check exact/case-insensitive match in DB users
-                const dbMatch = getCaseInsensitiveMatch(cleanName, Array.from(dbUserNames));
-                if (dbMatch) return dbMatch;
-
-                return null; // Unknown participant
-            };
-
-            // Find the closest fuzzy match for a name across all known members
-            const findFuzzyMatch = (name) => {
-                const allKnown = [...ACTIVE_MEMBERS, ...Array.from(dbUserNames)];
-                const lc = name.trim().toLowerCase();
-                let bestMatch = null;
-                let bestDist = Infinity;
-                for (const known of allKnown) {
-                    const dist = levenshtein(lc, known.toLowerCase());
-                    if (dist <= 2 && dist < bestDist) {
-                        bestDist = dist;
-                        bestMatch = known;
-                    }
-                }
-                return bestMatch ? { suggested: bestMatch, distance: bestDist } : null;
-            };
-
-            // Process Policies
-    
-    return (row, index) => {
-        let warnings = [];
-                let errors = [];
-                
-
-                let parsedRow = { ...row, _raw_csv_row: { ...row }, original_index: index };
-
-                let missingFields = [];
-                if (!row.description) missingFields.push('description');
-                if (!row.paid_by) missingFields.push('paid_by');
-                if (!row.amount) missingFields.push('amount');
-                if (!row.date) missingFields.push('date');
-
-                if (missingFields.length > 0) {
-                    parsedRow.missing_fields = missingFields;
-                    return { data: parsedRow, errors: [`Missing mandatory fields: ${missingFields.join(', ')}`], warnings, status: 'needs_resolution' };
-                }
-
-                // 4. Resolve Payer Name (exact/case-insensitive only — fuzzy via typo_suggestions)
-                const matchedPayer = checkKnownMember(row.paid_by);
-                parsedRow.paid_by = matchedPayer || row.paid_by.trim();
-
-                // Parse split_with names
-                let splitWithNames = [];
-                if (row.split_with) {
-                    splitWithNames = row.split_with.split(';').map(s => s.trim()).filter(Boolean);
-                } else if (row.split_details) {
-                    const parts = row.split_details.split(/[;,]/).map(s => s.trim()).filter(Boolean);
-                    parts.forEach(part => {
-                        const match = part.match(/^([^0-9%:]+)/);
-                        if (match) {
-                            splitWithNames.push(match[1].trim());
-                        }
-                    });
-                }
-
-                // Normalize splits (exact case-insensitive match only, no fuzzy)
-                const normalizedInvolved = splitWithNames.map(name => {
-                    const matched = checkKnownMember(name);
-                    return matched || name.trim();
-                });
-
-                // Detect unknown members & build typo suggestions
-                let unknownMembers = [];
-                const typoSuggestions = []; // [{ original, suggested, distance }]
-
-                const checkAndSuggest = (name) => {
-                    if (!name || checkKnownMember(name)) return;
-                    // Not a known member — check if it's a typo
-                    const fuzzy = findFuzzyMatch(name);
-                    if (fuzzy) {
-                        // Has a close match — it's a typo candidate, not completely unknown
-                        typoSuggestions.push({ original: name, suggested: fuzzy.suggested, distance: fuzzy.distance });
-                    } else {
-                        unknownMembers.push(name);
-                    }
-                };
-
-                checkAndSuggest(parsedRow.paid_by);
-                normalizedInvolved.forEach(name => checkAndSuggest(name));
-
-                // Deduplicate
-                const seenTypo = new Set();
-                const uniqueTypoSuggestions = typoSuggestions.filter(s => {
-                    const key = s.original.toLowerCase();
-                    if (seenTypo.has(key)) return false;
-                    seenTypo.add(key);
-                    return true;
-                });
-                unknownMembers = [...new Set(unknownMembers)];
-
-                if (unknownMembers.length > 0) {
-                    parsedRow.unknown_members = unknownMembers;
-                    warnings.push(`Unknown participant(s) found: ${unknownMembers.join(', ')}`);
-                }
-
-                // Attach typo suggestions — frontend will show "Did you mean?" popup
-                if (uniqueTypoSuggestions.length > 0) {
-                    parsedRow.typo_suggestions = uniqueTypoSuggestions;
-                    uniqueTypoSuggestions.forEach(s => {
-                        warnings.push(`⚠️ Possible typo: "${s.original}" — Did you mean "${s.suggested}"? (edit distance: ${s.distance})`);
-                    });
-                }
-
-                // 2. Comma Formatting in Numbers & 3. Precision Imbalances
-                let cleanAmountStr = row.amount.replace(/[^0-9.-]/g, '');
-                let amountBig;
-                try {
-                    amountBig = Big(cleanAmountStr).round(2);
-                    parsedRow.amount = amountBig.toNumber();
-                } catch (e) {
-                    errors.push('Invalid amount format');
-                    return processedRows.push({ data: parsedRow, errors, warnings, status: 'error' });
-                }
-
-                // 10. Negative Amounts / Edge Cases
-                if (amountBig.lt(0) && !row._allow_negative && !row._is_refund) {
-                    parsedRow.negative_amount_detected = true;
-                    parsedRow.original_amount = parsedRow.amount;
-                    parsedRow.resolution_type = 'refund';
-                    return {
-                        data: parsedRow,
-                        errors: [],
-                        warnings: [...warnings, 'Negative amount detected. This may represent a refund or reversal. No automatic changes have been made. Please choose how to handle this transaction.'],
-                        status: 'needs_resolution'
-                    };
-                }
-
-                // 10b. Zero Amounts
-                if (amountBig.eq(0) && !row._allow_zero) {
-                    parsedRow.zero_amount_detected = true;
-                    parsedRow.original_amount = parsedRow.amount;
-                    parsedRow.resolution_type = 'zero_amount';
-                    return {
-                        data: parsedRow,
-                        errors: [],
-                        warnings: [...warnings, 'Zero amount detected. This expense has no value. Please confirm how to handle this transaction.'],
-                        status: 'needs_resolution'
-                    };
-                }
-
-                // Inject overriding metadata applied by commitData during re-validation
-                parsedRow.is_refund = row._is_refund || false;
-
-                // 6. Settlements Logged as Expenses
-                const descLower = row.description.toLowerCase();
-                if (descLower.includes('paid back') || descLower.includes('settlement') || row.is_settlement === 'true') {
-                    parsedRow.is_settlement = true;
-                    warnings.push('Flagged as a settlement transfer rather than a shared expense.');
-                } else {
-                    parsedRow.is_settlement = false;
-                }
-
-                // 6.b Ambiguous Direct Transfer Detection
-                if (!parsedRow.is_settlement && !row._allow_shared_expense) {
-                    const transferKeywords = ['deposit', 'advance', 'transferred', 'transfer', 'paid to', 'sent', 'received', 'reimbursement', 'refunded', 'security deposit', 'rent deposit', 'wallet transfer'];
-                    const hasTransferKeyword = transferKeywords.some(kw => descLower.includes(kw));
-                    
-                    let rawSplitWith = row.split_with ? String(row.split_with).split(';') : [];
-                    if (rawSplitWith.length === 0 && row.split_details) {
-                        const parts = String(row.split_details).split(/[;,]/).filter(Boolean);
-                        parts.forEach(part => {
-                            const match = part.match(/^([^0-9%:]+)/);
-                            if (match) rawSplitWith.push(match[1]);
-                        });
-                    }
-                    rawSplitWith = rawSplitWith.map(s => s.trim()).filter(Boolean);
-                    
-                    const isSingleCounterparty = (rawSplitWith.length === 1);
-                    
-                    if (hasTransferKeyword || isSingleCounterparty) {
-                        let confidence = 0.50;
-                        if (hasTransferKeyword && isSingleCounterparty) confidence = 0.92;
-                        else if (hasTransferKeyword) confidence = 0.75;
-                        else if (isSingleCounterparty) confidence = 0.60;
-                        
-                        parsedRow.needs_resolution = true;
-                        parsedRow.resolution_type = 'direct_transfer';
-                        parsedRow.transfer_metadata = {
-                            confidence: confidence,
-                            original_description: row.description,
-                            payer: parsedRow.paid_by,
-                            recipients: rawSplitWith,
-                            amount: parsedRow.amount,
-                            reason: "Description and participant structure indicate this may be a direct transfer instead of a shared expense."
-                        };
-                        return {
-                            data: parsedRow,
-                            errors: [],
-                            warnings: [...warnings, 'Possible direct transfer detected. Please confirm.'],
-                            status: 'needs_resolution'
-                        };
-                    }
-                }
-
-                // --- NEW SETTLEMENT LOGIC (Rules 1, 5, 6, 8, 9, 10, 11) ---
-                if (parsedRow.is_settlement) {
-                    let rawSplitWith = row.split_with ? row.split_with.split(';') : [];
-                    if (rawSplitWith.length === 0 && row.split_details) {
-                        const parts = row.split_details.split(/[;,]/).filter(Boolean);
-                        parts.forEach(part => {
-                            const match = part.match(/^([^0-9%:]+)/);
-                            if (match) rawSplitWith.push(match[1]);
-                        });
-                    }
-                    rawSplitWith = rawSplitWith.map(s => s.trim()).filter(Boolean);
-
-                    if (rawSplitWith.length !== 1) {
-                        errors.push('One settlement should have exactly one receiver.');
-                    } else {
-                        const rawReceiver = rawSplitWith[0];
-                        const matchedReceiver = checkKnownMember(rawReceiver);
-                        const finalReceiver = matchedReceiver || rawReceiver.trim();
-                        
-                        if (finalReceiver.toLowerCase() === parsedRow.paid_by.toLowerCase()) {
-                            errors.push('A person cannot settle with themselves.');
-                        } else {
-                            parsedRow.settled_to = finalReceiver;
-                            checkAndSuggest(parsedRow.paid_by);
-                            checkAndSuggest(finalReceiver);
-                        }
-                    }
-                    if (amountBig.lte(0)) {
-                        errors.push('Settlement amount must be positive.');
-                    } else if (dbMap && userByNameMap) {
-                        const debtorName = parsedRow.paid_by.trim().toLowerCase();
-                        const creditorName = finalReceiver.toLowerCase();
-                        const debtorUserId = userByNameMap[debtorName];
-                        const debtorGuestId = guestByNameMap ? guestByNameMap[debtorName] : null;
-                        
-                        let debtorNetBalance = Big(0);
-
-                        for (let expensesArray of dbMap.values()) {
-                            for (let exp of expensesArray) {
-                                let paidByDebtor = false;
-                                if (debtorUserId && exp.paid_by_user_id === debtorUserId) paidByDebtor = true;
-                                if (debtorGuestId && exp.paid_by_guest_id === debtorGuestId) paidByDebtor = true;
-
-                                if (paidByDebtor) {
-                                    debtorNetBalance = debtorNetBalance.plus(exp.amount);
-                                }
-
-                                if (exp.ExpenseSplits) {
-                                    for (let split of exp.ExpenseSplits) {
-                                        let splitForDebtor = false;
-                                        if (debtorUserId && split.user_id === debtorUserId) splitForDebtor = true;
-                                        if (debtorGuestId && split.guest_id === debtorGuestId) splitForDebtor = true;
-
-                                        if (splitForDebtor) {
-                                            debtorNetBalance = debtorNetBalance.minus(split.calculated_share_amount);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if (debtorNetBalance.lt(0) && amountBig.gt(debtorNetBalance.abs())) {
-                            warnings.push(`Over-settlement warning: Repayment amount (${amountBig.toString()}) exceeds debtor's current outstanding negative net balance (${debtorNetBalance.abs().toString()}) in the database.`);
-                        }
-                    }
-                }
-
-                // 8. Non-Standardized & Incomplete Date Formats
-                const dateStr = row.date ? String(row.date).trim().replace(/\s+/g, ' ') : '';
-                if (dateStr) {
-                    // Detect incomplete dates
-                    let missing = [];
-                    if (/^\d{4}$/.test(dateStr)) missing = ['Month', 'Day'];
-                    else if (/^[A-Za-z]+$/.test(dateStr)) missing = ['Year', 'Day'];
-                    else if (/^[A-Za-z]+\s+\d{4}$/.test(dateStr) || /^\d{1,2}-\d{4}$/.test(dateStr) || /^\d{1,2}\/\d{4}$/.test(dateStr)) missing = ['Day'];
-                    else if (/^[A-Za-z]+-\d{1,2}$/.test(dateStr) || /^[A-Za-z]+\s+\d{1,2}$/.test(dateStr) || /^\d{1,2}-[A-Za-z]+$/.test(dateStr) || /^\d{1,2}\s+[A-Za-z]+$/.test(dateStr) || /^\d{1,2}\/\d{1,2}$/.test(dateStr)) missing = ['Year'];
-
-                    if (missing.length > 0) {
-                        parsedRow.needs_resolution = true;
-                        parsedRow.resolution_type = 'date';
-                        parsedRow.date_metadata = {
-                            original: dateStr,
-                            missing_fields: missing,
-                            reason: 'incomplete'
-                        };
-                        return { data: parsedRow, errors: [], warnings: [...warnings, `Incomplete date detected. Missing: ${missing.join(', ')}. Please provide the missing information.`], status: 'needs_resolution' };
-                    }
-
-                    const formats = [
-                        'dd-MM-yyyy', 'MM-dd-yyyy',
-                        'dd/MM/yyyy', 'MM/dd/yyyy',
-                        'yyyy-MM-dd',
-                        'dd MMM yyyy', 'dd MMMM yyyy',
-                        'MMM dd, yyyy', 'MMMM dd, yyyy',
-                        'MMM-dd-yyyy', 'MMMM-dd-yyyy',
-                        'dd-MMM-yyyy', 'dd-MMMM-yyyy',
-                        'd-M-yyyy', 'M-d-yyyy',
-                        'd/M/yyyy', 'M/d/yyyy',
-                        'dd MMM, yyyy', 'dd MMMM, yyyy'
-                    ];
-
-                    let validDates = new Set();
-                    for (let fmt of formats) {
-                        const parsed = parse(dateStr, fmt, new Date());
-                        if (isValid(parsed)) {
-                            // Verify strict matching to prevent rollovers (e.g. 31 Feb -> 3 Mar)
-                            const backFormat = format(parsed, fmt).replace(/\s+/g, ' ');
-                            if (backFormat.toLowerCase() === dateStr.toLowerCase()) {
-                                validDates.add(format(parsed, 'yyyy-MM-dd'));
-                            }
-                        }
-                    }
-
-                    if (validDates.size === 1) {
-                        parsedRow.date = Array.from(validDates)[0];
-                    } else if (validDates.size > 1) {
-                        parsedRow.needs_resolution = true;
-                        parsedRow.resolution_type = 'ambiguous_date';
-                        parsedRow.original_date = dateStr;
-                        parsedRow.possible_dates = Array.from(validDates);
-                        parsedRow.date_metadata = {
-                            original: dateStr,
-                            valid_interpretations: Array.from(validDates),
-                            reason: 'ambiguous'
-                        };
-                        return { data: parsedRow, errors: [], warnings: [...warnings, 'Ambiguous date detected. Multiple interpretations possible. Please choose the correct date.'], status: 'needs_resolution' };
-                    } else {
-                        errors.push(`Unrecognized or invalid date format: ${dateStr}`);
-                    }
-                }
-
-                let currency = (row.currency || '').toUpperCase().trim();
-                if (!currency) {
-                    parsedRow.needs_resolution = true;
-                    parsedRow.resolution_type = 'currency';
-                    parsedRow.currency_metadata = {
-                        original_currency: "",
-                        missing_currency: true,
-                        supported_currencies: Object.keys(EXCHANGE_RATES)
-                    };
-                    return { 
-                        data: parsedRow, 
-                        errors: [], 
-                        warnings: [...warnings, 'Currency is missing. Please select the currency.'], 
-                        status: 'needs_resolution' 
-                    };
-                }
-                let exchangeRate = 1.0;
-                if (currency !== 'INR' && currency) {
-                    if (EXCHANGE_RATES[currency]) {
-                        exchangeRate = EXCHANGE_RATES[currency];
-                        parsedRow.base_amount = Big(parsedRow.amount).times(exchangeRate).round(2).toNumber();
-                        warnings.push(`Converted ${parsedRow.amount} ${currency} to ${parsedRow.base_amount} INR using exchange rate ${exchangeRate}.`);
-                    } else {
-                        errors.push(`Unsupported currency: ${currency}`);
-                        // Give base_amount a dummy value to prevent NaN downstream, it will error out anyway
-                        parsedRow.base_amount = parsedRow.amount;
-                    }
-                } else {
-                    parsedRow.base_amount = parsedRow.amount;
-                }
-                parsedRow.currency = currency;
-                parsedRow.exchange_rate_to_base = exchangeRate;
-
-                if (!parsedRow.is_settlement) {
-                // 12. Conflicting Split Definitions
-                let parsedType = row.split_type ? row.split_type.toLowerCase() : 'equal';
-                if (parsedType === 'ratio' || parsedType === 'share_ratio') parsedType = 'share';
-                parsedRow.split_type = parsedType;
-                row.split_type = parsedType;
-
-                if (row.split_details && !row._allow_conflicting_split) {
-                    const hasValues = row.split_details.includes(':');
-                    const hasPercentages = row.split_details.includes('%');
-                    
-                    let conflict = null;
-                    if (!hasValues) {
-                        if (['percentage', 'unequal', 'share'].includes(parsedType)) {
-                            conflict = { type: 'equal', reason: `Split details do not contain explicit values, but the declared split type is ${parsedType.charAt(0).toUpperCase() + parsedType.slice(1)}.` };
-                        }
-                    } else {
-                        if (parsedType === 'equal') {
-                            conflict = { type: hasPercentages ? 'percentage' : 'share', reason: `Split details contain ${hasPercentages ? 'percentages' : 'explicit values'}, but the declared split type is Equal.` };
-                        } else if (parsedType === 'share' && hasPercentages) {
-                            conflict = { type: 'percentage', reason: 'Split details contain percentages, but the declared split type is Share Ratio.' };
-                        }
-                    }
-
-                    if (conflict) {
-                        parsedRow.needs_resolution = true;
-                        parsedRow.resolution_type = 'conflicting_split';
-                        parsedRow.conflicting_split_metadata = {
-                            declared_split_type: parsedType,
-                            detected_split_type: conflict.type,
-                            reason: conflict.reason
-                        };
-                        return { 
-                            data: parsedRow, 
-                            errors: [], 
-                            warnings: [...warnings, 'Declared split type conflicts with provided split details.'], 
-                            status: 'needs_resolution' 
-                        };
-                    }
-                }
-
-                // 7. Percentage and Unequal Breakdown Discrepancies
-                if (row.split_details && (row.split_type === 'percentage' || row.split_type === 'unequal' || row.split_type === 'share')) {
-                    const parts = row.split_details.split(',').map(s => s.split(':'));
-                    let totalVal = Big(0);
-                    let details = {};
-                    let invalidFormat = false;
-                    let hasZero = false;
-                    let hasNegative = false;
-                    let hasGreaterThan100 = false;
-                    let invalidPercentageNames = [];
-
-                    parts.forEach(([name, val]) => {
-                        const matchedName = checkKnownMember(name);
-                        const nName = matchedName || name.trim();
-                        if (!val) {
-                            invalidFormat = true;
-                            details[nName] = Big(0);
-                            return;
-                        }
-                        try {
-                            let cleanVal = val.trim();
-                            if (row.split_type === 'percentage') cleanVal = cleanVal.replace('%', '');
-                            else cleanVal = cleanVal.replace(/[^0-9.-]/g, ''); // unequal: strip currency symbols
-                            
-                            const p = Big(cleanVal);
-                            
-                            if (row.split_type === 'percentage') {
-                                if (p.lte(0) || p.gt(100)) {
-                                    invalidPercentageNames.push(nName);
-                                }
-                            } else if (row.split_type === 'share') {
-                                if (p.lte(0)) {
-                                    invalidPercentageNames.push(nName); // Reusing this array to collect invalid ratios
-                                }
-                            } else {
-                                if (p.lt(0)) hasNegative = true;
-                                if (p.eq(0)) hasZero = true;
-                            }
-
-                            let share = p;
-                            if (row.split_type === 'unequal' && exchangeRate !== 1.0) {
-                                share = p.times(exchangeRate).round(2);
-                            }
-
-                            totalVal = totalVal.plus(share);
-                            details[nName] = share;
-                        } catch (e) {
-                            invalidFormat = true;
-                            details[nName] = Big(0);
-                        }
-                    });
-
-                    if (invalidPercentageNames.length > 0) {
-                        if (row.split_type === 'share') {
-                            errors.push(`Invalid ratio for ${invalidPercentageNames.join(', ')}: must be numeric and greater than 0.`);
-                        } else {
-                            errors.push(`Invalid percentage for ${invalidPercentageNames.join(', ')}: must be greater than 0 and less than or equal to 100.`);
-                        }
-                    }
-                    if (hasNegative) {
-                        errors.push(`Negative amount found in ${row.split_type} split. Not allowed.`);
-                    }
-                    if (hasZero) {
-                        warnings.push(`Zero amount found in ${row.split_type} split. Proceeding with 0 liability.`);
-                    }
-
-                    if (invalidFormat) {
-                        errors.push(`Invalid split_details format for ${row.split_type}. Expected "Name:Value, Name:Value"`);
-                        let parsedDet = {};
-                        ACTIVE_MEMBERS.forEach(m => parsedDet[m] = 0);
-                        parsedRow.raw_split_details = parsedDet;
-                    } else if (row.split_type === 'percentage') {
-                        if (totalVal.eq(0)) {
-                            errors.push('Total percentage cannot be zero.');
-                            let parsedDet = {};
-                            ACTIVE_MEMBERS.forEach(m => parsedDet[m] = 0);
-                            parsedRow.raw_split_details = parsedDet;
-                        } else if (!totalVal.eq(100)) {
-                            warnings.push(`Percentages sum to ${totalVal.toString()}%. Normalized to 100%.`);
-                            let normalizedDetails = {};
-                            for (let nName in details) {
-                                normalizedDetails[nName] = details[nName].div(totalVal).times(100).round(2).toNumber();
-                            }
-                            parsedRow.parsed_split_details = normalizedDetails;
-                            let parsedDet = {};
-                            for (let k in details) parsedDet[k] = details[k].toNumber();
-                            parsedRow.raw_split_details = parsedDet;
-                        } else {
-                            let parsedDet = {};
-                            for (let k in details) parsedDet[k] = details[k].toNumber();
-                            parsedRow.parsed_split_details = parsedDet;
-                            parsedRow.raw_split_details = parsedDet;
-                        }
-                    } else if (row.split_type === 'unequal') {
-                        if (!totalVal.eq(parsedRow.base_amount)) {
-                            errors.push(`Unequal splits sum to ${totalVal.toString()} (base currency), which does not match total expense amount ${parsedRow.base_amount}.`);
-                        }
-                        let parsedDet = {};
-                        for (let k in details) parsedDet[k] = details[k].toNumber();
-                        parsedRow.parsed_split_details = parsedDet;
-                        parsedRow.raw_split_details = parsedDet;
-                    } else if (row.split_type === 'share') {
-                        if (totalVal.lte(0)) {
-                            errors.push('Invalid ratio distribution. Total ratio must be greater than zero.');
-                        }
-                        let parsedDet = {};
-                        for (let k in details) parsedDet[k] = details[k].toNumber();
-                        parsedRow.parsed_split_details = parsedDet;
-                        parsedRow.raw_split_details = parsedDet;
-                        parsedRow.total_ratio = totalVal.toNumber();
-                    }
-                } else if ((row.split_type === 'percentage' || row.split_type === 'unequal' || row.split_type === 'share') && !row.split_details) {
-                    errors.push(`Invalid split_details format for ${row.split_type}. Expected "Name:Value, Name:Value"`);
-                    let parsedDet = {};
-                    ACTIVE_MEMBERS.forEach(m => parsedDet[m] = 0);
-                    parsedRow.raw_split_details = parsedDet;
-                }
-
-                // 1. Duplicate Detection — O(n) Hash Map (batch) + DB lookup
-                const currentCurrency = (row.currency || 'INR').toLowerCase();
-                const batchKey = `${parsedRow.date}_${parsedRow.amount}_${(parsedRow.paid_by || '').toLowerCase()}_${currentCurrency}`;
-
-                // --- Batch duplicate check (against other rows in same CSV upload) ---
-                if (processedMap.has(batchKey)) {
-                    const prev = processedMap.get(batchKey);
-                    const conf = calculateConfidence(
-                        { date: parsedRow.date, amount: parsedRow.amount, currency: currentCurrency, description: parsedRow.description, paid_by: parsedRow.paid_by },
-                        { date: prev.date, amount: prev.amount, currency: prev.currency, description: prev.description, paid_by: prev.paid_by }
-                    );
-                    if (conf > 0) {
-                        // Only flag as duplicate if split members also match exactly
-                        const prevSplits = new Set(prev.split_members || []);
-                        const curSplits  = new Set(normalizedInvolved.map(m => m.toLowerCase()));
-                        const sameSplits = prevSplits.size === curSplits.size &&
-                            [...prevSplits].every(m => curSplits.has(m));
-                        if (sameSplits) {
-                            warnings.push(`⚠️ Possible duplicate of Row #${prev.original_index} in this file (Confidence: ${conf}%)`);
-                        }
-                    }
-                } else {
-                    // Save to batch map for future rows to compare against
-                    processedMap.set(batchKey, {
-                        ...parsedRow,
-                        currency: currentCurrency,
-                        split_members: normalizedInvolved.map(m => m.toLowerCase())
-                    });
-                }
-
-                // --- Database duplicate check (against already-imported expenses) ---
-                const payerId = getPrefixedId(parsedRow.paid_by);
-                if (payerId) {
-                    const dbKey = `${parsedRow.date}_${parsedRow.amount}_${payerId}_${currentCurrency}`;
-                    if (dbMap.has(dbKey)) {
-                        const candidates = dbMap.get(dbKey);
-                        for (const dbExp of candidates) {
-                            const conf = calculateConfidence(
-                                { date: parsedRow.date, amount: parsedRow.amount, currency: currentCurrency, description: parsedRow.description, paid_by: parsedRow.paid_by },
-                                { date: dbExp.date ? String(dbExp.date).split('T')[0] : '', amount: dbExp.amount, currency: dbExp.currency || 'INR', description: dbExp.description, paid_by: parsedRow.paid_by }
-                            );
-                            if (conf > 0) {
-                                // Compare split members with DB splits
-                                const dbSplitNames = new Set(
-                                    (dbExp.ExpenseSplits || []).map(s => {
-                                        if (s.user_id) {
-                                            const u = dbUsers.find(x => x.id === s.user_id);
-                                            return u ? u.name.trim().toLowerCase() : 'unknown';
-                                        } else if (s.guest_id) {
-                                            const g = groupGuests.find(x => x.id === s.guest_id);
-                                            return g ? g.name.trim().toLowerCase() : 'unknown';
-                                        }
-                                        return 'unknown';
-                                    })
-                                );
-                                const curSplits = new Set(normalizedInvolved.map(m => m.toLowerCase()));
-                                const sameSplits = dbSplitNames.size === curSplits.size &&
-                                    [...dbSplitNames].every(m => curSplits.has(m));
-                                if (sameSplits) {
-                                    warnings.push(`⚠️ Matches existing DB Expense #${dbExp.id} — same payer, amount, currency, date & split members (Confidence: ${conf}%). Will be imported with a note.`);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 11. Post-Exit Member Billed Detection
-                if (parsedRow.date && parsedRow.split_type !== 'settlement') {
-                    let involved = [];
-                    if (parsedRow.parsed_split_details) {
-                        involved = Object.keys(parsedRow.parsed_split_details);
-                    } else if (normalizedInvolved && normalizedInvolved.length > 0) {
-                        involved = [...normalizedInvolved];
-                    }
-                    
-                    let expDate = new Date(parsedRow.date);
-                    let affected_members = [];
-
-                    involved.forEach(m => {
-                        const d = MOCK_MEMBER_DATES[m];
-                        if (d && d.left_at) {
-                            let leftDate = new Date(d.left_at);
-                            if (expDate > leftDate) {
-                                affected_members.push({
-                                    name: m,
-                                    exit_date: d.left_at
-                                });
-                            }
-                        }
-                    });
-
-                    if (affected_members.length > 0 && !row._allow_post_exit_member) {
-                        parsedRow.needs_resolution = true;
-                        parsedRow.resolution_type = 'post_exit_member';
-                        parsedRow.post_exit_metadata = {
-                            expense_date: parsedRow.date,
-                            affected_members: affected_members
-                        };
-                        return { 
-                            data: parsedRow, 
-                            errors: [], 
-                            warnings: [...warnings, 'One or more participants officially left the group before this expense date.'], 
-                            status: 'needs_resolution' 
-                        };
-                    }
-                }
-
-                // 11b. Mid-Month Joiner Detection
-                if (parsedRow.date) {
-                    let involved = [];
-                    if (parsedRow.parsed_split_details) {
-                        involved = Object.keys(parsedRow.parsed_split_details);
-                    } else if (normalizedInvolved && normalizedInvolved.length > 0) {
-                        involved = [...normalizedInvolved];
-                    }
-                    
-                    let expDate = new Date(parsedRow.date);
-                    let affected_members = [];
-
-                    involved.forEach(m => {
-                        const d = MOCK_MEMBER_DATES[m];
-                        if (d && d.joined_at) {
-                            let joinDate = new Date(d.joined_at);
-                            if (expDate > joinDate && expDate.getMonth() === joinDate.getMonth() && expDate.getFullYear() === joinDate.getFullYear()) {
-                                affected_members.push({
-                                    name: m,
-                                    join_date: d.joined_at
-                                });
-                            }
-                        }
-                    });
-
-                    if (affected_members.length > 0 && !row._allow_mid_month_joiner) {
-                        parsedRow.needs_resolution = true;
-                        parsedRow.resolution_type = 'mid_month_joiner';
-                        parsedRow.affected_member = affected_members[0].name;
-                        parsedRow.join_date = affected_members[0].join_date;
-                        parsedRow.expense_date = parsedRow.date;
-                        return { 
-                            data: parsedRow, 
-                            errors: [], 
-                            warnings: [...warnings, 'One or more participants joined during this billing period. Billing policy cannot be determined automatically.'], 
-                            status: 'needs_resolution' 
-                        };
-                    }
-                }
-
-                // Apply User-Requested Prorata for Mid-Month Joiners
-                if (row._prorate_mid_month_joiner) {
-                    const start = new Date(row.billingPeriodStart);
-                    const end = new Date(row.billingPeriodEnd);
-                    const totalDays = Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1;
-                    
-                    let currentSplits = {};
-                    if (parsedRow.parsed_split_details) {
-                        currentSplits = { ...parsedRow.parsed_split_details };
-                    } else if (parsedRow.split_type === 'equal') {
-                        let involved = normalizedInvolved && normalizedInvolved.length > 0 ? normalizedInvolved : Object.keys(userByNameMap).concat(Object.keys(guestByNameMap || {}));
-                        let equalShare = Big(100).div(involved.length).round(2).toNumber();
-                        involved.forEach(m => currentSplits[m.toLowerCase()] = equalShare);
-                        parsedRow.split_type = 'percentage';
-                    }
-
-                    let diff = Big(0);
-                    let nonJoiners = [];
-                    
-                    for (let m in currentSplits) {
-                        const d = MOCK_MEMBER_DATES[m];
-                        let isJoiner = false;
-                        if (d && d.joined_at) {
-                            let join = new Date(d.joined_at);
-                            if (join > start && join <= end) {
-                                isJoiner = true;
-                                let activeDays = Math.round((end - join) / (1000 * 60 * 60 * 24)) + 1;
-                                if (activeDays < 0) activeDays = 0;
-                                let ratio = Big(activeDays).div(totalDays);
-                                
-                                let oldVal = Big(currentSplits[m]);
-                                let newVal = oldVal.times(ratio).round(2);
-                                diff = diff.plus(oldVal.minus(newVal));
-                                currentSplits[m] = newVal.toNumber();
-                            }
-                        }
-                        if (!isJoiner) nonJoiners.push(m);
-                    }
-                    
-                    if (diff.gt(0) && nonJoiners.length > 0) {
-                        let splitDiff = diff.div(nonJoiners.length).round(2);
-                        let sumDistributed = Big(0);
-                        
-                        for (let i = 0; i < nonJoiners.length; i++) {
-                            let m = nonJoiners[i];
-                            if (i === nonJoiners.length - 1) {
-                                let remainder = diff.minus(sumDistributed);
-                                currentSplits[m] = Big(currentSplits[m]).plus(remainder).round(2).toNumber();
-                            } else {
-                                currentSplits[m] = Big(currentSplits[m]).plus(splitDiff).round(2).toNumber();
-                                sumDistributed = sumDistributed.plus(splitDiff);
-                            }
-                        }
-                    }
-                    parsedRow.parsed_split_details = currentSplits;
-                }
-
-                } // End if(!parsedRow.is_settlement)
-                parsedRow.anomaly = anomaly;
-
-                return {
-                    data: parsedRow,
-                    errors,
-                    warnings,
-                    status: errors.length > 0 ? 'error' : (warnings.length > 0 ? 'warning' : 'ok')
-                };
-    };
+const normalizeName = (name, activeMembers = []) => {
+  if (!name) return null;
+  const n = name.trim().toLowerCase();
+  // Simple typo mapping based on active members
+  let bestMatch = n;
+  let minDistance = 999;
+  for (let member of activeMembers) {
+    const dist = levenshtein(n, member);
+    if (dist <= 2 && dist < minDistance) {
+      minDistance = dist;
+      bestMatch = member;
+    }
+  }
+  return bestMatch; // Fallback to raw if no close match
 };
 
 exports.processCSV = async (req, res) => {
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
-    const results = [];
-    const processedRows = [];
+  const results = [];
+  const processedRows = [];
 
-    const stream = Readable.from(req.file.buffer);
+  const stream = Readable.from(req.file.buffer);
 
-    const isTsv = req.file.originalname.endsWith('.tsv') || (req.file.buffer.toString('utf8', 0, 1000).includes('\t') && !req.file.buffer.toString('utf8', 0, 1000).includes(','));
-    const delimiter = isTsv ? '\t' : ',';
+  csv.parseStream(stream, { headers: true })
+    .on('data', (row) => results.push(row))
+    .on('end', () => {
+      // Process Policies
+      results.forEach((row, index) => {
+        let warnings = [];
+        let errors = [];
+        let parsedRow = { ...row, original_index: index };
 
-    csv.parseStream(stream, { headers: true, ignoreEmpty: true, delimiter })
-        .on('error', (error) => {
-            console.error('CSV Parsing Error:', error);
-            if (!res.headersSent) {
-                res.status(400).json({ error: 'Invalid CSV format. Please ensure the file is a properly formatted CSV or TSV.' });
+        // 5. Missing Obligatory Values
+        if (!row.description) errors.push('Missing description');
+        if (!row.paid_by) errors.push('Missing paid_by');
+
+        if (!row.amount) {
+           errors.push('Missing amount');
+           return processedRows.push({ data: parsedRow, errors, warnings, status: 'error' });
+        }
+
+        // 4. Name Variants/Typos
+        parsedRow.paid_by = normalizeName(row.paid_by, ACTIVE_MEMBERS);
+
+        // 2. Comma Formatting in Numbers & 3. Precision Imbalances
+        let cleanAmountStr = row.amount.replace(/[^0-9.-]/g, '');
+        let amountBig;
+        try {
+           amountBig = Big(cleanAmountStr).round(2, Big.roundHalfUp);
+           parsedRow.amount = amountBig.toNumber();
+        } catch (e) {
+           errors.push('Invalid amount format');
+           return processedRows.push({ data: parsedRow, errors, warnings, status: 'error' });
+        }
+
+        // 10. Negative Amounts / Edge Cases
+        if (amountBig.lt(0)) {
+           warnings.push('Negative amount detected. Processed as a refund (roles reversed).');
+           parsedRow.amount = Math.abs(parsedRow.amount);
+           parsedRow.is_refund = true; // Business logic: the UI will swap payer/split participants visually
+        }
+
+        // 6. Settlements Logged as Expenses
+        const descLower = row.description.toLowerCase();
+        if (descLower.includes('paid back') || descLower.includes('settlement') || row.is_settlement === 'true') {
+           parsedRow.is_settlement = true;
+           warnings.push('Flagged as a settlement transfer rather than a shared expense.');
+        } else {
+           parsedRow.is_settlement = false;
+        }
+
+        // 8. Non-Standardized Date Formats
+        let parsedDate = null;
+        const dateStr = row.date;
+        if (dateStr) {
+           // Try parsing common formats
+           let d = new Date(dateStr);
+           if (!isNaN(d.getTime())) {
+              parsedRow.date = d.toISOString().split('T')[0];
+           } else {
+              // Try DD/MM/YYYY format
+              const parts = dateStr.split('/');
+              if (parts.length === 3) {
+                  const dd = parseInt(parts[0], 10);
+                  const mm = parseInt(parts[1], 10) - 1;
+                  const yyyy = parseInt(parts[2], 10);
+                  d = new Date(yyyy, mm, dd);
+                  if (!isNaN(d.getTime()) && yyyy > 1900) {
+                      parsedRow.date = d.toISOString().split('T')[0];
+                  } else {
+                      errors.push(`Unrecognized date format: ${dateStr}`);
+                  }
+              } else {
+                  errors.push(`Unrecognized date format: ${dateStr}`);
+              }
+           }
+        }
+
+        let currency = (row.currency || '').toUpperCase().trim();
+        if (!currency) {
+            errors.push('Missing currency');
+        }
+        let exchangeRate = 1.0;
+        if (currency !== 'INR') {
+            if (EXCHANGE_RATES[currency]) {
+                exchangeRate = EXCHANGE_RATES[currency];
+                parsedRow.base_amount = Big(parsedRow.amount).times(exchangeRate).round(2, Big.roundHalfUp).toNumber();
+                warnings.push(`Foreign currency ${currency} converted to INR at rate ${exchangeRate}. Displaying as INR.`);
+            } else {
+                parsedRow.base_amount = parsedRow.amount;
             }
-        })
-        .on('data', (row) => results.push(row))
-        .on('end', async () => {
-            // Fetch all registered users in the database to check against
-            let dbUserNames = new Set();
-            let dbUsers = [];
-            try {
-                dbUsers = await User.findAll({ attributes: ['id', 'name'] });
-                dbUserNames = new Set(dbUsers.map(u => u.name.trim().toLowerCase()));
-            } catch (err) {
-                console.error('Error fetching registered users:', err);
+        } else {
+            parsedRow.base_amount = parsedRow.amount;
+        }
+        parsedRow.currency = currency;
+        parsedRow.exchange_rate_to_base = exchangeRate;
+
+        // 12. Conflicting Split Definitions
+        let hasConflictingSplit = false;
+        if (row.split_type === 'equal' && row.split_details) {
+            hasConflictingSplit = true;
+        }
+        parsedRow.split_type = row.split_type || 'equal';
+
+        // 7. Percentage Breakdown Discrepancies
+        if (row.split_details && (row.split_type === 'percentage' || hasConflictingSplit)) {
+           const parts = row.split_details.split(',').map(s => s.split(':'));
+           let totalPct = Big(0);
+           let details = {};
+           let invalidFormat = false;
+           
+           parts.forEach(([name, pct]) => {
+              const nName = normalizeName(name, ACTIVE_MEMBERS);
+              if (!pct) {
+                  invalidFormat = true;
+                  details[nName] = Big(0);
+                  return;
+              }
+              try {
+                  const p = Big(pct.trim().replace('%',''));
+                  totalPct = totalPct.plus(p);
+                  details[nName] = p;
+              } catch (e) {
+                  invalidFormat = true;
+                  details[nName] = Big(0);
+              }
+           });
+           
+           if (invalidFormat) {
+               errors.push('Invalid split_details format for percentage. Expected "Name:XX%, Name:YY%"');
+               let parsedDet = {};
+               ACTIVE_MEMBERS.forEach(m => parsedDet[m] = 0);
+               parsedRow.raw_split_details = parsedDet;
+           } else if (!totalPct.eq(100)) {
+               warnings.push(`Percentages sum to ${totalPct.toString()}%. Normalized to 100%.`);
+               let normalizedDetails = {};
+               for (let nName in details) {
+                   normalizedDetails[nName] = details[nName].div(totalPct).times(100).round(2, Big.roundHalfUp).toNumber();
+               }
+               parsedRow.parsed_split_details = normalizedDetails;
+               let parsedDet = {};
+               for(let k in details) parsedDet[k] = details[k].toNumber();
+               parsedRow.raw_split_details = parsedDet;
+           } else {
+               let parsedDet = {};
+               for(let k in details) parsedDet[k] = details[k].toNumber();
+               parsedRow.parsed_split_details = parsedDet;
+               parsedRow.raw_split_details = parsedDet;
+           }
+        } else if (row.split_type === 'percentage' && !row.split_details) {
+            errors.push('Invalid split_details format for percentage. Expected "Name:XX%, Name:YY%"');
+            let parsedDet = {};
+            ACTIVE_MEMBERS.forEach(m => parsedDet[m] = 0);
+            parsedRow.raw_split_details = parsedDet;
+        }
+
+        // 1. Duplicate Detection (Checked against previously processed rows in this batch)
+        let isDuplicate = false;
+        for (let prev of processedRows) {
+            if (prev.status !== 'error') {
+               if (prev.data.date === parsedRow.date && prev.data.paid_by === parsedRow.paid_by && prev.data.amount === parsedRow.amount) {
+                  if (levenshtein(prev.data.description.toLowerCase(), row.description.toLowerCase()) <= 3) {
+                      isDuplicate = true;
+                      warnings.push(`Possible duplicate of row ${prev.data.original_index}`);
+                      break;
+                  }
+               }
+            }
+        }
+
+        // 11. Temporal Border Exclusions
+        let anomaly = null;
+        if (parsedRow.date) {
+            let involved = [];
+            if (parsedRow.parsed_split_details) {
+                involved = Object.keys(parsedRow.parsed_split_details);
+            } else {
+                // Default equal split: Only include members who were active during the month of the expense
+                let expDate = new Date(parsedRow.date);
+                ACTIVE_MEMBERS.forEach(m => {
+                    const d = MOCK_MEMBER_DATES[m];
+                    if (!d) {
+                        involved.push(m);
+                    } else {
+                        let joinDate = d.joined_at ? new Date(d.joined_at) : null;
+                        let leftDate = d.left_at ? new Date(d.left_at) : null;
+                        
+                        let isInactiveMonth = false;
+                        if (leftDate && (expDate.getFullYear() > leftDate.getFullYear() || (expDate.getFullYear() === leftDate.getFullYear() && expDate.getMonth() > leftDate.getMonth()))) {
+                            isInactiveMonth = true;
+                        }
+                        if (joinDate && (expDate.getFullYear() < joinDate.getFullYear() || (expDate.getFullYear() === joinDate.getFullYear() && expDate.getMonth() < joinDate.getMonth()))) {
+                            isInactiveMonth = true;
+                        }
+                        
+                        if (!isInactiveMonth) {
+                            involved.push(m);
+                        }
+                    }
+                });
+            }
+            let currentSplits = {};
+            if (parsedRow.split_type === 'equal') {
+                involved.forEach(m => currentSplits[m] = Big(100).div(involved.length).toNumber());
+            } else if (parsedRow.split_type === 'percentage') {
+                currentSplits = { ...parsedRow.parsed_split_details };
             }
 
-            // Fetch existing expenses + splits for DB duplicate detection
-            const targetGroupId = req.body ? req.body.groupId : null;
-            let dbExpenses = [];
-            let groupGuests = [];
-            try {
-                const expQuery = {
-                    where: { status: 'active' },
-                    include: [{ model: ExpenseSplit }]
-                };
-                if (targetGroupId) {
-                    expQuery.where.group_id = targetGroupId;
-                    groupGuests = await Guest.findAll({ where: { group_id: targetGroupId } });
+            let originalSplitRecord = { ...currentSplits };
+            for(let k in originalSplitRecord) {
+                originalSplitRecord[k] = Big(originalSplitRecord[k]).round(2).toNumber();
+            }
+            
+            let correctionNeeded = false;
+            let originalInvolved = [...involved];
+            let anomalyMessage = '';
+            let anomalyMeta = {};
+            
+            involved.forEach(member => {
+                const dates = MOCK_MEMBER_DATES[member];
+                if (dates && currentSplits[member] > 0) {
+                    let expenseDate = new Date(parsedRow.date);
+                    let joinDate = dates.joined_at ? new Date(dates.joined_at) : null;
+                    let leftDate = dates.left_at ? new Date(dates.left_at) : null;
+                    
+                    let activeDays = -1;
+                    let daysInMonth = new Date(expenseDate.getFullYear(), expenseDate.getMonth() + 1, 0).getDate();
+                    
+                    // Pro-rata logic: If they joined or left IN THE SAME MONTH as the expense,
+                    // calculate their active days for that month.
+                    if (leftDate && expenseDate.getMonth() === leftDate.getMonth() && expenseDate.getFullYear() === leftDate.getFullYear()) {
+                        activeDays = leftDate.getDate();
+                    } else if (joinDate && expenseDate.getMonth() === joinDate.getMonth() && expenseDate.getFullYear() === joinDate.getFullYear()) {
+                        activeDays = (daysInMonth - joinDate.getDate()) + 1;
+                    } else if (leftDate && expenseDate > leftDate) {
+                        activeDays = 0; // Explicitly included but completely inactive
+                    } else if (joinDate && expenseDate < joinDate) {
+                        activeDays = 0; // Explicitly included but completely inactive
+                    }
+                    
+                    if (activeDays >= 0) {
+                        let maxRatio = Big(activeDays).div(daysInMonth);
+                        let oldShare = Big(currentSplits[member]);
+                        let allowedShare = oldShare.times(maxRatio).toNumber();
+                        
+                        if (oldShare.gt(allowedShare)) {
+                             correctionNeeded = true;
+                             currentSplits[member] = allowedShare;
+                             
+                             let formattedMonth = expenseDate.toLocaleString('default', { month: 'long', year: 'numeric' });
+                             if (activeDays === 0) {
+                                 if (leftDate && expenseDate > leftDate) {
+                                     anomalyMeta.anomaly_type = 'POST_EXIT_MEMBER_BILLED';
+                                     let capMember = member.charAt(0).toUpperCase() + member.slice(1);
+                                     anomalyMessage = `${capMember} officially left the flat on ${leftDate.toLocaleDateString('en-US', {month: 'long', day: 'numeric', year: 'numeric'})}. However, they were included in the '${row.description || 'Unnamed Expense'}' bill dated ${expenseDate.toLocaleDateString('en-US', {month: 'long', day: 'numeric', year: 'numeric'})}. Note fields confirm: '${row.notes || 'oops meera still in the group list'}'.`;
+                                 } else {
+                                     anomalyMessage = `User ${member} was not active in ${formattedMonth}.`;
+                                 }
+                             } else {
+                                 if (joinDate && expenseDate.getMonth() === joinDate.getMonth() && expenseDate.getFullYear() === joinDate.getFullYear()) {
+                                     anomalyMeta.anomaly_type = 'MID_MONTH_JOINER';
+                                     let capMember = member.charAt(0).toUpperCase() + member.slice(1);
+                                     anomalyMessage = `Problem: ${capMember} joined the group on ${joinDate.toLocaleDateString('en-US', {month: 'long', day: 'numeric', year: 'numeric'})} (Active for ${activeDays}/${daysInMonth} days). A full month flat split is being applied.\n\nSystem Calculation: ${capMember}'s share is adjusted to ${activeDays} days pro-rata. The remaining unallocated amount from his early inactive ${daysInMonth - activeDays} days is distributed among the full-time members.`;
+                                 } else {
+                                     anomalyMessage = `User ${member} was only active for ${activeDays} out of ${daysInMonth} days in ${formattedMonth}.`;
+                                 }
+                             }
+                             anomalyMeta = { total_month_days: daysInMonth, user_active_days: activeDays, ...anomalyMeta };
+                        }
+                    }
                 }
-                dbExpenses = await Expense.findAll(expQuery);
-            } catch (err) {
-                console.error('Error fetching DB expenses for duplicate check:', err);
+            });
+            
+            if (correctionNeeded) {
+                 let total = Object.values(currentSplits).reduce((a,b) => Big(a).plus(b).toNumber(), 0);
+                 if (Big(total).gte(0) && Big(total).lt(100)) {
+                      let diff = Big(100).minus(total).toNumber();
+                      let activeCount = 0;
+                      
+                      originalInvolved.forEach(m => {
+                          let d = MOCK_MEMBER_DATES[m];
+                          let expDate = new Date(parsedRow.date);
+                          let isActive = true;
+                          if (d) {
+                              if (d.left_at && expDate > new Date(d.left_at) && (expDate.getMonth() !== new Date(d.left_at).getMonth() || expDate.getFullYear() !== new Date(d.left_at).getFullYear())) isActive = false;
+                              if (d.joined_at && expDate < new Date(d.joined_at) && (expDate.getMonth() !== new Date(d.joined_at).getMonth() || expDate.getFullYear() !== new Date(d.joined_at).getFullYear())) isActive = false;
+                          }
+                          if (isActive) activeCount++;
+                      });
+                      
+                      if (activeCount > 0) {
+                          originalInvolved.forEach(m => {
+                              let d = MOCK_MEMBER_DATES[m];
+                              let expDate = new Date(parsedRow.date);
+                              let isActive = true;
+                              if (d) {
+                                  if (d.left_at && expDate > new Date(d.left_at) && (expDate.getMonth() !== new Date(d.left_at).getMonth() || expDate.getFullYear() !== new Date(d.left_at).getFullYear())) isActive = false;
+                                  if (d.joined_at && expDate < new Date(d.joined_at) && (expDate.getMonth() !== new Date(d.joined_at).getMonth() || expDate.getFullYear() !== new Date(d.joined_at).getFullYear())) isActive = false;
+                              }
+                              if (isActive) currentSplits[m] = Big(currentSplits[m]).plus(Big(diff).div(activeCount)).toNumber();
+                          });
+                      }
+                      
+                      let finalTotal = Big(0);
+                      let keys = Object.keys(currentSplits);
+                      for(let i=0; i<keys.length; i++) {
+                          let k = keys[i];
+                          if (i === keys.length - 1) {
+                               currentSplits[k] = Big(100).minus(finalTotal).round(2).toNumber();
+                          } else {
+                               currentSplits[k] = Big(currentSplits[k]).round(2).toNumber();
+                               finalTotal = finalTotal.plus(currentSplits[k]);
+                          }
+                      }
+                      
+                      anomaly = {
+                          status: "anomaly_detected",
+                          type: anomalyMeta.anomaly_type || "TEMPORAL_BORDER_EXCLUSION",
+                          message: anomalyMessage,
+                          original_split: originalSplitRecord,
+                          suggested_split: currentSplits,
+                          metadata: anomalyMeta
+                      };
+                 }
             }
+        }
+        
+        parsedRow.anomaly = anomaly;
 
-            // Build name → id lookup maps
-            const userByNameMap = {};
-            dbUsers.forEach(u => { userByNameMap[u.name.trim().toLowerCase()] = u.id; });
-            const guestByNameMap = {};
-            groupGuests.forEach(g => { guestByNameMap[g.name.trim().toLowerCase()] = g.id; });
-
-            // Helper: resolve payer name to prefixed id string
-            const getPrefixedId = (name) => {
-                const lc = (name || '').trim().toLowerCase();
-                if (userByNameMap[lc]) return `user_${userByNameMap[lc]}`;
-                if (guestByNameMap[lc]) return `guest_${guestByNameMap[lc]}`;
-                return null;
-            };
-
-            // Build O(1) DB lookup map: "date_amount_payerId_currency" → [expense]
-            const dbMap = new Map();
-            dbExpenses.forEach(exp => {
-                const payerId = exp.paid_by_user_id
-                    ? `user_${exp.paid_by_user_id}`
-                    : `guest_${exp.paid_by_guest_id}`;
-                const curr = (exp.currency || 'INR').toLowerCase();
-                const key = `${exp.date}_${exp.amount}_${payerId}_${curr}`;
-                if (!dbMap.has(key)) dbMap.set(key, []);
-                dbMap.get(key).push(exp);
-            });
-
-            // Batch duplicate map: "date_amount_payerName_currency" → parsedRow
-            const processedMap = new Map();
-
-
-            const validator = createRowValidator({ ACTIVE_MEMBERS, dbUserNames, EXCHANGE_RATES, MOCK_MEMBER_DATES, dbMap, processedMap, getPrefixedId, levenshtein, userByNameMap, guestByNameMap });
-            results.forEach((row, index) => {
-                processedRows.push(validator(row, index));
-            });
-                        res.json({ rows: processedRows });
+        processedRows.push({
+            data: parsedRow,
+            errors,
+            warnings,
+            status: errors.length > 0 ? 'error' : (warnings.length > 0 ? 'warning' : 'ok')
         });
+      });
+
+      res.json({ rows: processedRows });
+    });
 };
+
 exports.commitData = async (req, res) => {
-    const { rows, fileName, resolutions = {} } = req.body;
-    let corrections = req.body.corrections || {};
-
-    // Map resolutions into corrections to perfectly trigger validator re-run
-    rows.forEach((r, index) => {
-        const d = r.data || r;
-        const originalIndex = d.original_index !== undefined ? d.original_index : index;
-        
-        if (d.zeroAmountResolution) {
-            const zr = d.zeroAmountResolution;
-            if (zr.action === 'edit_amount' && zr.amount !== undefined) {
-                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), amount: zr.amount };
-            } else if (zr.action === 'keep_zero') {
-                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), _allow_zero: true };
-            } else if (zr.action === 'skip') {
-                r.status = 'rejected';
-            }
-        }
-        
-        if (d.refundResolution) {
-            const rr = d.refundResolution;
-            if (rr.action === 'refund') {
-                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), amount: Math.abs(Number(d.amount)), _is_refund: true };
-            } else if (rr.action === 'keep_negative') {
-                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), _allow_negative: true, _is_refund: false };
-            } else if (rr.action === 'edit_amount' && rr.new_amount !== undefined) {
-                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), amount: Number(rr.new_amount) };
-            } else if (rr.action === 'skip') {
-                r.status = 'rejected';
-            }
-        }
-
-        if (d.dateResolution) {
-            const dr = d.dateResolution;
-            const resolvedDate = dr.selectedDate || dr.date;
-            if (resolvedDate) {
-                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), date: resolvedDate };
-            } else if (dr.action === 'skip') {
-                r.status = 'rejected';
-            }
-        }
-
-        if (d.transferResolution) {
-            const tr = d.transferResolution;
-            if (tr.action === 'shared_expense') {
-                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), _allow_shared_expense: true };
-            } else if (tr.action === 'direct_transfer') {
-                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), is_settlement: 'true' };
-            } else if (tr.action === 'edit_transaction') {
-                corrections[originalIndex] = { ...(corrections[originalIndex] || {}) };
-                if (tr.description !== undefined) corrections[originalIndex].description = tr.description;
-                if (tr.split_with !== undefined) corrections[originalIndex].split_with = tr.split_with;
-                if (tr.split_details !== undefined) corrections[originalIndex].split_details = tr.split_details;
-                if (tr.split_type !== undefined) corrections[originalIndex].split_type = tr.split_type;
-                if (tr.amount !== undefined) corrections[originalIndex].amount = tr.amount;
-            } else if (tr.action === 'skip') {
-                r.status = 'rejected';
-            }
-        }
-
-        if (d.splitResolution) {
-            const sr = d.splitResolution;
-            if (sr.action === 'keep_declared_type') {
-                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), _allow_conflicting_split: true };
-            } else if (sr.action === 'change_split_type' && sr.newSplitType) {
-                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), split_type: sr.newSplitType, _allow_conflicting_split: true };
-            } else if (sr.action === 'edit_split_details') {
-                corrections[originalIndex] = { ...(corrections[originalIndex] || {}) };
-                if (sr.split_details !== undefined) corrections[originalIndex].split_details = sr.split_details;
-                if (sr.split_type !== undefined) corrections[originalIndex].split_type = sr.split_type;
-            } else if (sr.action === 'skip') {
-                r.status = 'rejected';
-            }
-        }
-
-        if (d.midMonthJoinerResolution) {
-            const mj = d.midMonthJoinerResolution;
-            if (mj.action === 'full_share') {
-                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), _allow_mid_month_joiner: true };
-            } else if (mj.action === 'prorated') {
-                corrections[originalIndex] = { 
-                    ...(corrections[originalIndex] || {}), 
-                    _allow_mid_month_joiner: true, 
-                    _prorate_mid_month_joiner: true,
-                    billingPeriodStart: mj.billingPeriodStart,
-                    billingPeriodEnd: mj.billingPeriodEnd
-                };
-            } else if (mj.action === 'exclude_member' && mj.member) {
-                const memberToRemove = mj.member.toLowerCase();
-                const currentSplitWith = (corrections[originalIndex] && corrections[originalIndex].split_with !== undefined) ? corrections[originalIndex].split_with : (d._raw_csv_row ? d._raw_csv_row.split_with : d.split_with) || '';
-                const currentSplitDetails = (corrections[originalIndex] && corrections[originalIndex].split_details !== undefined) ? corrections[originalIndex].split_details : (d._raw_csv_row ? d._raw_csv_row.split_details : d.split_details) || '';
-
-                if (currentSplitDetails) {
-                    const parts = currentSplitDetails.split(/[;,]/).filter(Boolean);
-                    const newParts = parts.filter(p => !p.trim().toLowerCase().startsWith(memberToRemove));
-                    corrections[originalIndex] = { ...(corrections[originalIndex] || {}), split_details: newParts.join(';') };
-                } else if (currentSplitWith) {
-                    const parts = currentSplitWith.split(/[;,]/).filter(Boolean);
-                    const newParts = parts.filter(p => p.trim().toLowerCase() !== memberToRemove);
-                    corrections[originalIndex] = { ...(corrections[originalIndex] || {}), split_with: newParts.join(';') };
-                }
-            } else if (mj.action === 'edit_split') {
-                corrections[originalIndex] = { ...(corrections[originalIndex] || {}) };
-                if (mj.split_with !== undefined) corrections[originalIndex].split_with = mj.split_with;
-                if (mj.split_details !== undefined) corrections[originalIndex].split_details = mj.split_details;
-            } else if (mj.action === 'skip') {
-                r.status = 'rejected';
-            }
-        }
-
-        if (d.postExitResolution) {
-            const pr = d.postExitResolution;
-            const currentSplitWith = (corrections[originalIndex] && corrections[originalIndex].split_with !== undefined) ? corrections[originalIndex].split_with : (d._raw_csv_row ? d._raw_csv_row.split_with : d.split_with) || '';
-            const currentSplitDetails = (corrections[originalIndex] && corrections[originalIndex].split_details !== undefined) ? corrections[originalIndex].split_details : (d._raw_csv_row ? d._raw_csv_row.split_details : d.split_details) || '';
-
-            if (pr.action === 'keep_member') {
-                corrections[originalIndex] = { ...(corrections[originalIndex] || {}), _allow_post_exit_member: true };
-            } else if (pr.action === 'remove_member' && pr.member) {
-                const memberToRemove = pr.member.toLowerCase();
-                
-                if (currentSplitDetails) {
-                    const parts = currentSplitDetails.split(/[;,]/).filter(Boolean);
-                    const newParts = parts.filter(p => !p.trim().toLowerCase().startsWith(memberToRemove));
-                    corrections[originalIndex] = { ...(corrections[originalIndex] || {}), split_details: newParts.join(';') };
-                } else if (currentSplitWith) {
-                    const parts = currentSplitWith.split(/[;,]/).filter(Boolean);
-                    const newParts = parts.filter(p => p.trim().toLowerCase() !== memberToRemove);
-                    corrections[originalIndex] = { ...(corrections[originalIndex] || {}), split_with: newParts.join(';') };
-                }
-            } else if (pr.action === 'replace_member' && pr.member && pr.new_member) {
-                const oldMem = pr.member.toLowerCase();
-                const newMem = pr.new_member;
-                
-                if (currentSplitDetails) {
-                    const parts = currentSplitDetails.split(/[;,]/).filter(Boolean);
-                    const newParts = parts.map(p => p.trim().toLowerCase().startsWith(oldMem) ? p.replace(new RegExp('^' + oldMem, 'i'), newMem) : p);
-                    corrections[originalIndex] = { ...(corrections[originalIndex] || {}), split_details: newParts.join(';') };
-                } else if (currentSplitWith) {
-                    const parts = currentSplitWith.split(/[;,]/).filter(Boolean);
-                    const newParts = parts.map(p => p.trim().toLowerCase() === oldMem ? newMem : p);
-                    corrections[originalIndex] = { ...(corrections[originalIndex] || {}), split_with: newParts.join(';') };
-                }
-            } else if (pr.action === 'edit_members') {
-                corrections[originalIndex] = { ...(corrections[originalIndex] || {}) };
-                if (pr.split_with !== undefined) corrections[originalIndex].split_with = pr.split_with;
-                if (pr.split_details !== undefined) corrections[originalIndex].split_details = pr.split_details;
-            } else if (pr.action === 'skip') {
-                r.status = 'rejected';
-            }
-        }
-    });
-
-    const hasCorrections = Object.keys(corrections).length > 0;
+    // In a real scenario, this would map the final user-approved rows to the Database
+    // Uses transactions to rollback if any insertion fails.
+    const { rows, fileName } = req.body;
     
-    // We need to fetch DB state if we have corrections
-    let dbUserNames = new Set();
-    let dbUsers = [];
-    let groupGuests = [];
-    let dbExpenses = [];
-    
-    if (hasCorrections) {
-        dbUsers = await User.findAll({ attributes: ['id', 'name'] });
-        dbUserNames = new Set(dbUsers.map(u => u.name.trim().toLowerCase()));
-        
-        // Target group doesn't exist yet, so we just pass what we can
-        dbExpenses = await Expense.findAll({ where: { status: 'active' } });
-        
-        const userByNameMap = {};
-        dbUsers.forEach(u => { userByNameMap[u.name.trim().toLowerCase()] = u.id; });
-        const guestByNameMap = {}; // Define safely to prevent crash in validator instantiation
-        const getPrefixedId = (name) => {
-            const lc = (name || '').trim().toLowerCase();
-            if (userByNameMap[lc]) return `user_${userByNameMap[lc]}`;
-            return null; // guests aren't in DB yet for this group
-        };
-        
-        const dbMap = new Map();
-        dbExpenses.forEach(exp => {
-            const payerId = exp.paid_by_user_id ? `user_${exp.paid_by_user_id}` : `guest_${exp.paid_by_guest_id}`;
-            const curr = (exp.currency || 'INR').toLowerCase();
-            const key = `${exp.date}_${exp.amount}_${payerId}_${curr}`;
-            if (!dbMap.has(key)) dbMap.set(key, []);
-            dbMap.get(key).push(exp);
-        });
-
-        const processedMap = new Map();
-        rows.forEach(r => {
-            if (r.status === 'ok' || r.status === 'warning') {
-                const batchKey = `${r.data.date}_${r.data.amount}_${(r.data.paid_by || '').toLowerCase()}_${(r.data.currency || 'INR').toLowerCase()}`;
-                processedMap.set(batchKey, r.data);
-            }
-        });
-
-        const validator = createRowValidator({ ACTIVE_MEMBERS, dbUserNames, EXCHANGE_RATES, MOCK_MEMBER_DATES, dbMap, processedMap, getPrefixedId, levenshtein, userByNameMap, guestByNameMap });
-
-        for (let i = 0; i < rows.length; i++) {
-            const r = rows[i];
-            if (r.status === 'needs_resolution' && corrections[r.data.original_index]) {
-                const originalRawRow = r.data._raw_csv_row || r.data;
-                const correctedRawRow = { ...originalRawRow, ...corrections[r.data.original_index] };
-                const validated = validator(correctedRawRow, r.data.original_index);
-                rows[i] = validated;
-                
-                if (validated.status === 'ok' || validated.status === 'warning') {
-                    const batchKey = `${validated.data.date}_${validated.data.amount}_${(validated.data.paid_by || '').toLowerCase()}_${(validated.data.currency || 'INR').toLowerCase()}`;
-                    processedMap.set(batchKey, validated.data);
-                }
-            }
-        }
-    }
-
-    // 1. Validation: Collect all names that require user resolution
-    //    - unknown_members: names with no exact or fuzzy match
-    //    - typo_suggestions: names with fuzzy match (require "match"/"guest"/"user" choice)
-    const detectedUnknownMembers = new Set();  // needs 'guest' or 'user'
-    const detectedTypoCandidates = new Set();  // needs 'match', 'guest', or 'user'
-
-    rows.forEach(rowData => {
-        if (rowData.status === 'error') return;
-        const d = rowData.data;
-        if (d.unknown_members) {
-            d.unknown_members.forEach(m => detectedUnknownMembers.add(m.trim().toLowerCase()));
-        }
-        // Bug Fix: typo suggestions also need user confirmation
-        if (d.typo_suggestions) {
-            d.typo_suggestions.forEach(s => detectedTypoCandidates.add(s.original.trim().toLowerCase()));
-        }
-    });
-
-    // 2. Validate unknown members — must resolve as 'guest' or 'user'
-    for (let member of Array.from(detectedUnknownMembers)) {
-        const matchedKey = Object.keys(resolutions).find(k => k.trim().toLowerCase() === member);
-        if (!matchedKey) {
-            return res.status(400).json({ error: `Missing resolution for unknown participant: "${member}". Please resolve in the wizard before committing.` });
-        }
-        const resolution = resolutions[matchedKey];
-        const action = typeof resolution === 'string' ? resolution : resolution.action;
-        if (action !== 'guest' && action !== 'user') {
-            return res.status(400).json({ error: `Invalid resolution action for unknown member "${member}": must be 'guest' or 'user', got '${action}'` });
-        }
-    }
-
-    // 3. Validate typo candidates — must resolve as 'match', 'guest', or 'user'
-    //    Bug Fix (Major): 'match' was previously rejected by validation — now correctly allowed
-    for (let member of Array.from(detectedTypoCandidates)) {
-        const matchedKey = Object.keys(resolutions).find(k => k.trim().toLowerCase() === member);
-        if (!matchedKey) {
-            return res.status(400).json({ error: `Missing resolution for typo candidate: "${member}". Please confirm "Did you mean?" in the wizard before committing.` });
-        }
-        const resolution = resolutions[matchedKey];
-        const action = typeof resolution === 'string' ? resolution : resolution.action;
-        // 'match' MUST include a matched_name to be valid
-        if (action === 'match' && !resolution.matched_name) {
-            return res.status(400).json({ error: `Resolution 'match' for "${member}" is missing matched_name field.` });
-        }
-        if (action !== 'guest' && action !== 'user' && action !== 'match') {
-            return res.status(400).json({ error: `Invalid resolution action for typo candidate "${member}": must be 'guest', 'user', or 'match', got '${action}'` });
-        }
-    }
-
-
     const t = await sequelize.transaction();
     try {
-        // 3. Create Group
-        const groupName = `Imported CSV: ${fileName || 'Data'}`;
-        const { Group } = require('../models');
-        const group = await Group.create({
-            name: groupName,
-            base_currency: 'INR'
-        }, { transaction: t });
-
-        // 4. Extract Unique Names
+        // 1. Extract Unique Names
         const uniqueNames = new Set();
         rows.forEach(rowData => {
-            if (rowData.status === 'error') return;
+            if(rowData.status === 'error') return;
             const d = rowData.data;
             if (d.paid_by) uniqueNames.add(d.paid_by.trim().toLowerCase());
             if (d.parsed_split_details) {
@@ -1205,77 +423,42 @@ exports.commitData = async (req, res) => {
         });
         if (uniqueNames.size === 0) ACTIVE_MEMBERS.forEach(m => uniqueNames.add(m));
 
-        // 5. Separate Users vs. Guests
+        // 2. Auto-Provision Users
         const userMap = {}; // name -> userId
-        const guestMap = {}; // name -> guestId
-
         for (let name of Array.from(uniqueNames)) {
-            if (!name) continue;
-
-            // Check if name is resolved as guest, user, or typo match
-            const matchedKey = Object.keys(resolutions).find(k => k.trim().toLowerCase() === name);
-            const resolution = matchedKey ? resolutions[matchedKey] : null;
-            const action = resolution ? (typeof resolution === 'string' ? resolution : resolution.action) : null;
-
-            if (action === 'guest') {
+            if(!name) continue;
+            let user = await User.findOne({ where: sequelize.where(sequelize.fn('LOWER', sequelize.col('name')), name), transaction: t });
+            if (!user) {
                 const capName = name.charAt(0).toUpperCase() + name.slice(1);
-                // Use findOrCreate to prevent duplicate Guest profiles
-                const [guest] = await Guest.findOrCreate({
-                    where: { name: capName, group_id: group.id },
-                    defaults: { user_id: null, email: null, phone: null, notes: `Imported as guest via CSV` },
-                    transaction: t
-                });
-                guestMap[name] = guest.id;
-            } else if (action === 'match' && resolution.matched_name) {
-                // User confirmed "Yes, Aishaa → Aisha" — remap to the matched existing user
-                const matchedName = resolution.matched_name.trim().toLowerCase();
-                let user = await User.findOne({
-                    where: sequelize.where(sequelize.fn('LOWER', sequelize.col('name')), matchedName),
-                    transaction: t
-                });
-                if (user) {
-                    // Point the typo name to the real user's ID
-                    userMap[name] = user.id;
-                } else {
-                    // Fallback: treat as new user if somehow not found
-                    const capName = resolution.matched_name.charAt(0).toUpperCase() + resolution.matched_name.slice(1);
-                    user = await User.create({
-                        name: capName,
-                        email: `${matchedName.replace(/\s+/g, '_')}@auto.fairshare.com`,
-                        password_hash: null
-                    }, { transaction: t });
-                    userMap[name] = user.id;
-                }
-            } else {
-                let user = await User.findOne({ where: sequelize.where(sequelize.fn('LOWER', sequelize.col('name')), name), transaction: t });
-                if (!user) {
-                    const capName = name.charAt(0).toUpperCase() + name.slice(1);
-                    user = await User.create({
-                        name: capName,
-                        email: `${name.replace(/\s+/g, '_')}@auto.fairshare.com`,
-                        password_hash: null
-                    }, { transaction: t });
-                }
-                userMap[name] = user.id;
+                user = await User.create({
+                    name: capName,
+                    email: `${name.replace(/\s+/g,'_')}@auto.fairshare.com`,
+                    password_hash: null
+                }, { transaction: t });
             }
+            userMap[name] = user.id;
         }
 
-        // 6. Create Group Members for Users
-        const adminId = req.user.id;
-        await GroupMember.findOrCreate({
-            where: { group_id: group.id, user_id: adminId },
-            defaults: { role: 'admin', joined_at: new Date() },
-            transaction: t
-        });
+        // 3. Create Group
+        const groupName = `Imported CSV: ${fileName || 'Data'}`;
+        const { Group } = require('../models');
+        const group = await Group.create({
+            name: groupName,
+            base_currency: 'INR'
+        }, { transaction: t });
 
+        // 4. Create Group Members
+        const adminId = req.user.id;
+        await GroupMember.create({ group_id: group.id, user_id: adminId, role: 'admin', joined_at: new Date() }, { transaction: t });
+        
         for (let name in userMap) {
             let uId = userMap[name];
             if (uId !== adminId) {
                 let joinedAt = new Date('2025-01-01'); // default far in past
                 let leftAt = null;
                 if (MOCK_MEMBER_DATES[name]) {
-                    if (MOCK_MEMBER_DATES[name].joined_at) joinedAt = new Date(MOCK_MEMBER_DATES[name].joined_at);
-                    if (MOCK_MEMBER_DATES[name].left_at) leftAt = new Date(MOCK_MEMBER_DATES[name].left_at);
+                    if(MOCK_MEMBER_DATES[name].joined_at) joinedAt = new Date(MOCK_MEMBER_DATES[name].joined_at);
+                    if(MOCK_MEMBER_DATES[name].left_at) leftAt = new Date(MOCK_MEMBER_DATES[name].left_at);
                 }
                 await GroupMember.findOrCreate({
                     where: { group_id: group.id, user_id: uId },
@@ -1285,170 +468,73 @@ exports.commitData = async (req, res) => {
             }
         }
 
-        // 7. Create Expenses and splits
         for (let rowData of rows) {
-            if (rowData.status === 'error' || rowData.rejected) continue; // Skip errors and rejected
+            if(rowData.status === 'error' || rowData.rejected) continue; // Skip errors and rejected
             const d = rowData.data;
-            
-
 
             const payerName = d.paid_by.trim().toLowerCase();
-
-            let paid_by_user_id = null;
-            let paid_by_guest_id = null;
-
-            if (guestMap[payerName]) {
-                paid_by_guest_id = guestMap[payerName];
-            } else {
-                paid_by_user_id = userMap[payerName] || adminId;
-            }
+            const payerId = userMap[payerName] || adminId;
 
             let finalNotes = d.notes || '';
-
-            // Append any CSV-phase warnings (duplicate hints, anomalies, etc.) into expense notes
             if (rowData.changes_applied && rowData.changes_applied.length > 0) {
                 finalNotes += `\n[System Corrections]: ${rowData.changes_applied.join(' | ')}`;
             }
-            if (rowData.warnings && rowData.warnings.length > 0) {
-                const dupWarnings = rowData.warnings.filter(w => w.includes('duplicate') || w.includes('Matches existing'));
-                if (dupWarnings.length > 0) {
-                    finalNotes += `\n[Duplicate Warnings]: ${dupWarnings.join(' | ')}`;
-                }
-            }
-
-            // Pre-insert DB duplicate check: look for a committed expense with same payer + amount + currency + date
-            try {
-                const dupWhere = {
-                    amount: d.base_amount,
-                    currency: d.currency || 'INR',
-                    date: d.date || new Date().toISOString().split('T')[0],
-                    status: 'active'
-                };
-                if (paid_by_user_id) dupWhere.paid_by_user_id = paid_by_user_id;
-                if (paid_by_guest_id) dupWhere.paid_by_guest_id = paid_by_guest_id;
-
-                const existingMatch = await Expense.findOne({ where: dupWhere, transaction: t });
-                if (existingMatch) {
-                    // Compute confidence using description similarity
-                    const conf = calculateConfidence(
-                        { date: d.date, amount: d.base_amount, currency: d.currency || 'INR', description: d.description, paid_by: d.paid_by },
-                        { date: String(existingMatch.date).split('T')[0], amount: existingMatch.amount, currency: existingMatch.currency || 'INR', description: existingMatch.description, paid_by: d.paid_by }
-                    );
-                    finalNotes += `\n[System Note]: Imported despite ${conf}% confidence duplicate match with existing Expense #${existingMatch.id} (${existingMatch.description}, ₹${existingMatch.amount} on ${existingMatch.date}).`;
-                }
-            } catch (dupErr) {
-                console.error('commitData duplicate pre-check error:', dupErr);
-            }
-
-
-            let settled_to_user_id = null;
-            let settled_to_guest_id = null;
-            if (d.is_settlement && d.settled_to) {
-                const receiverName = d.settled_to.trim().toLowerCase();
-                if (guestMap[receiverName]) settled_to_guest_id = guestMap[receiverName];
-                else settled_to_user_id = userMap[receiverName] || adminId;
-            }
 
             const exp = await Expense.create({
-                settled_to_user_id,
-                settled_to_guest_id,
                 group_id: group.id,
                 description: d.description,
-                paid_by_user_id,
-                paid_by_guest_id,
-                original_amount: d.amount,
-                amount: d.base_amount,
-                currency: d.currency || 'INR',
-                base_currency: 'INR',
+                paid_by_user_id: payerId,
+                amount: d.base_amount, 
+                currency: d.currency || 'INR', 
                 exchange_rate_to_base: d.exchange_rate_to_base || 1.0,
-                conversion_timestamp: new Date(),
-                exchange_rate_source: 'system_default',
                 split_type: d.split_type,
                 date: d.date || new Date().toISOString().split('T')[0],
                 notes: finalNotes.trim(),
                 is_settlement: d.is_settlement,
-                is_refund: d.is_refund || false,
                 status: 'active'
             }, { transaction: t });
 
-            // Skip split creation if it's a settlement (Rule 3 & 4)
-            if (d.is_settlement) continue;
-
             // Create Splits
-            let splitMembers = d.parsed_split_details
-                ? Object.keys(d.parsed_split_details)
-                : (d.split_with
-                    ? d.split_with.split(';').map(n => {
-                        const lowercase = n.trim().toLowerCase();
-                        const activeMatch = ACTIVE_MEMBERS.find(am => am.toLowerCase() === lowercase);
-                        if (activeMatch) return activeMatch;
-                        const matchedUserKey = Object.keys(userMap).find(k => k.toLowerCase() === lowercase);
-                        if (matchedUserKey) return matchedUserKey;
-                        const matchedGuestKey = Object.keys(guestMap).find(k => k.toLowerCase() === lowercase);
-                        if (matchedGuestKey) return matchedGuestKey;
-                        return lowercase;
-                    })
-                    : Object.keys(userMap).concat(Object.keys(guestMap)));
-
+            let splitMembers = d.parsed_split_details ? Object.keys(d.parsed_split_details) : Object.keys(userMap);
             let validSplitMembers = [];
-
+            
             // Check temporal bounds!
             const expDate = new Date(exp.date);
             for (let member of splitMembers) {
                 const dates = MOCK_MEMBER_DATES[member];
-                if (dates && dates.left_at && expDate > new Date(dates.left_at) && !d._allow_post_exit_member) continue; // Exclude from split!
+                if (dates && dates.left_at && expDate > new Date(dates.left_at)) continue; // Exclude from split!
                 if (dates && dates.joined_at && expDate < new Date(dates.joined_at)) continue; // Exclude from split!
                 validSplitMembers.push(member);
             }
             if (validSplitMembers.length === 0) validSplitMembers = [payerName]; // fallback to payer
-
+            
             let baseAmountBig = Big(d.base_amount);
             let totalAllocated = Big(0);
 
             for (let i = 0; i < validSplitMembers.length; i++) {
                 let member = validSplitMembers[i];
-
-                let user_id = null;
-                let guest_id = null;
-                if (guestMap[member]) {
-                    guest_id = guestMap[member];
-                } else {
-                    user_id = userMap[member] || adminId;
-                }
-
+                const mId = userMap[member] || adminId;
                 let actualShareBig;
-
+                
                 if (d.parsed_split_details && d.split_type === 'percentage') {
-                    actualShareBig = baseAmountBig.times(d.parsed_split_details[member] || 0).div(100).round(4);
-                } else if (d.parsed_split_details && d.split_type === 'unequal') {
-                    actualShareBig = Big(d.parsed_split_details[member] || 0).round(4);
-                } else if (d.parsed_split_details && d.split_type === 'share') {
-                    let totalRatioBig = Big(d.total_ratio || 1); // Fallback to 1 to prevent division by zero if parsing failed somehow
-                    let memberRatio = Big(d.parsed_split_details[member] || 0);
-                    actualShareBig = baseAmountBig.times(memberRatio).div(totalRatioBig).round(4);
+                     actualShareBig = baseAmountBig.times(d.parsed_split_details[member] || 0).div(100).round(4);
                 } else {
-                    actualShareBig = baseAmountBig.div(validSplitMembers.length).round(4);
+                     actualShareBig = baseAmountBig.div(validSplitMembers.length).round(4);
                 }
 
-                // Zero-Sum logic: distribute sub-cent rounding fractions to the last member (only for non-unequal splits)
-                if (d.split_type !== 'unequal' && i === validSplitMembers.length - 1) {
-                    actualShareBig = baseAmountBig.minus(totalAllocated).round(4);
+                // Zero-Sum logic: distribute sub-cent rounding fractions to the last member
+                if (i === validSplitMembers.length - 1) {
+                     actualShareBig = baseAmountBig.minus(totalAllocated).round(4);
                 }
-
+                
                 totalAllocated = totalAllocated.plus(actualShareBig);
 
                 await ExpenseSplit.create({
                     expense_id: exp.id,
-                    user_id,
-                    guest_id,
+                    user_id: mId,
                     calculated_share_amount: actualShareBig.toNumber(),
                     raw_split_value: null
                 }, { transaction: t });
-            }
-
-            // 7.b Strict Zero-Sum Validation for Unequal Splits in Transaction
-            if (d.split_type === 'unequal' && !totalAllocated.eq(baseAmountBig)) {
-                throw new Error(`Zero-Sum Validation Failed for unequal split on Expense '${d.description}'. Sum of shares (${totalAllocated.toString()}) does not equal total amount (${baseAmountBig.toString()}).`);
             }
         }
         await t.commit();
