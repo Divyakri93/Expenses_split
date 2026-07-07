@@ -2,7 +2,7 @@ const csv = require('fast-csv');
 const { Readable } = require('stream');
 const Big = require('big.js');
 Big.RM = 2; // Banker's Rounding (Half-Even)
-const { parse, isValid, parseISO } = require('date-fns');
+const { parse, isValid, parseISO, format } = require('date-fns');
 const { sequelize, Expense, ExpenseSplit, User, GroupMember, Guest } = require('../models');
 
 // Mock data to simulate DB state during parse for speed, in production this is fetched per group.
