@@ -221,8 +221,8 @@ This is a portfolio demonstration project. While PRs are welcome, the architectu
 
 ## 📫 Contact
 
-**[Your Name]**  
-*Senior Backend Engineer*  
-Email: `[Your Email]`  
-LinkedIn: `[Your LinkedIn Profile]`  
-GitHub: `[Your GitHub Profile]`
+**Divya Kumari**  
+*Student at Lovely Professional University*  
+Email: `[divyakumari99055@gmail.com]`  
+LinkedIn: `[www.linkedin.com/in/divya-kumari93]`  
+GitHub: `[https://github.com/Divyakri93]`
