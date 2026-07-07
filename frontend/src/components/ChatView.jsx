@@ -29,7 +29,7 @@ const ChatView = ({ groupId }) => {
         fetchHistory();
 
         // Connect Socket
-        let socketUrl = import.meta.env.VITE_API_URL || '';
+        let socketUrl = import.meta.env.VITE_API_URL || (import.meta.env.MODE === 'production' ? 'https://fairshare-backend-gg71.onrender.com' : '');
         if (socketUrl.endsWith('/')) socketUrl = socketUrl.slice(0, -1);
         const newSocket = io(socketUrl);
 
