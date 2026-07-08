@@ -17,10 +17,11 @@ if (process.env.DATABASE_URL) {
     logging: false
   });
 } else {
+const path = require('path');
   // Fallback to SQLite locally
   sequelize = new Sequelize({
     dialect: 'sqlite',
-    storage: './database.sqlite',
+    storage: path.join(__dirname, '../database.sqlite'),
     logging: false,
   });
 }
